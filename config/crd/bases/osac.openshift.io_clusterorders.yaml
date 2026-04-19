@@ -55,11 +55,13 @@ spec:
                     description: |-
                       PodCIDR is the CIDR for the cluster's pod network.
                       Defaults to 10.128.0.0/14 if not specified.
+                    pattern: ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$
                     type: string
                   serviceCIDR:
                     description: |-
                       ServiceCIDR is the CIDR for the cluster's service network.
                       Defaults to 172.30.0.0/16 if not specified.
+                    pattern: ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$
                     type: string
                 type: object
               nodeRequests:

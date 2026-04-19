@@ -63,10 +63,12 @@ type ClusterNetworkSpec struct {
 	// PodCIDR is the CIDR for the cluster's pod network.
 	// Defaults to 10.128.0.0/14 if not specified.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$`
 	PodCIDR string `json:"podCIDR,omitempty"`
 	// ServiceCIDR is the CIDR for the cluster's service network.
 	// Defaults to 172.30.0.0/16 if not specified.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$`
 	ServiceCIDR string `json:"serviceCIDR,omitempty"`
 }
 
