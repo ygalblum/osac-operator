@@ -20,10 +20,10 @@ cluster are managed by different personas.
 | Tenant controller | reconciles Tenant CRs | manage Tenant namespace, UDN resources |
 | AAP | executes playbooks | manage KubeVirt VirtualMachine/VirtualMachineInstance |
 
-The `ComputeInstance` and `Tenant` custom resources remain on the management
-cluster. Their controllers reconcile those resources locally and watch the
-downstream Kubernetes objects (VMs, namespaces, UDN) on the remote cluster
-via a dedicated kubeconfig.
+All OSAC custom resources remain on the management cluster. The
+`ComputeInstance` and `Tenant` controllers watch the downstream Kubernetes
+objects (VMs, namespaces, UDN) on the remote cluster via a dedicated
+kubeconfig.
 
 osac-operator relies on
 [multicluster-runtime](https://github.com/kubernetes-sigs/multicluster-runtime)
@@ -32,8 +32,8 @@ standard [kubernetes.core](https://github.com/ansible-collections/kubernetes.cor
 Ansible collection, passing a kubeconfig to each task to target the remote
 cluster.
 
-Other controllers are local-only and incompatible with the remote cluster
-option (see [Constraints](#constraints)).
+The `cluster` controller is incompatible with the remote cluster option
+(see [Constraints](#constraints)).
 
 ## Configuration
 
@@ -50,9 +50,9 @@ instead of the local one.
 | `--enable-compute-instance-controller` | `OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER` | `false` | Enable the ComputeInstance controller. |
 
 > **Note:** When no `--enable-*-controller` flag is set, the operator enables
-> all controllers by default. When using a remote cluster, at least one of
-> `--enable-tenant-controller` or `--enable-compute-instance-controller` must
-> be set explicitly to avoid also enabling the controllers that are
+> all controllers by default. When using a remote cluster, enable only the
+> compatible controllers (`tenant`, `compute-instance`, and/or `networking`)
+> explicitly to avoid also enabling the `cluster` controller, which is
 > incompatible with the remote cluster option.
 
 The kubeconfig is typically provided to the operator pod as a mounted
@@ -119,9 +119,9 @@ kubectl create secret generic <secret-name> \
 ### 2. Configure the operator
 
 Set `OSAC_REMOTE_CLUSTER_KUBECONFIG` and mount the Secret (see example
-above). Enable only the controllers that should run against the remote cluster
-(`tenant` and/or `compute-instance`). Other controllers, if needed, must run
-in a separate operator instance without the remote kubeconfig.
+above). Enable only the compatible controllers (`tenant`, `compute-instance`,
+and/or `networking`). The `cluster` controller, if needed, is incompatible with the
+remote kubeconfig and must run in a separate operator instance without it.
 
 ### 3. Configure AAP
 
@@ -142,9 +142,10 @@ be readable by the `osac-sa` service account in the AAP namespace.
 
 ## Constraints
 
-- `--remote-cluster-kubeconfig` is only compatible with the `tenant` and
-  `compute-instance` controllers. The operator will exit with an error if
-  other controllers are enabled alongside it. Run those in a separate
-  operator instance without the remote kubeconfig.
+- `--remote-cluster-kubeconfig` is compatible with the `tenant`,
+  `compute-instance`, and `networking` controllers. The operator will exit
+  with an error if the `cluster` controller is enabled alongside it. Run
+  the `cluster` controller in a separate operator instance without the
+  remote kubeconfig.
 - When no remote kubeconfig is configured, the operator operates in
   single-cluster mode with no behaviour change.

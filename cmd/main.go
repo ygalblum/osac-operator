@@ -334,6 +334,13 @@ func setupWebhookController(
 	return setupReconciler(provider, statusPollInterval)
 }
 
+func targetClusterFromManager(mgr mcmanager.Manager) multicluster.ClusterName {
+	if mgr.GetProvider() != nil {
+		return remoteClusterName
+	}
+	return mcmanager.LocalCluster
+}
+
 // setupClusterControllers registers the ClusterOrder controller and, when grpcConn is set,
 // the cluster Feedback controller.
 func setupClusterControllers(
@@ -376,10 +383,7 @@ func setupComputeInstanceControllers(
 	localMgr := mgr.GetLocalManager()
 	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
 	tenantNamespace := os.Getenv(envTenantNamespace)
-	targetCluster := mcmanager.LocalCluster
-	if mgr.GetProvider() != nil {
-		targetCluster = remoteClusterName
-	}
+	targetCluster := targetClusterFromManager(mgr)
 	computeInstanceProvider, statusPollInterval, err := createProviderFromEnv(
 		envComputeInstanceProvisionWebhook, envComputeInstanceDeprovisionWebhook,
 		"", "", // ComputeInstance uses shared AAP templates (no per-resource overrides)
@@ -413,11 +417,7 @@ func setupComputeInstanceControllers(
 
 // setupTenantController registers the Tenant controller.
 func setupTenantController(mgr mcmanager.Manager) error {
-	targetCluster := mcmanager.LocalCluster
-	if mgr.GetProvider() != nil {
-		targetCluster = remoteClusterName
-	}
-
+	targetCluster := targetClusterFromManager(mgr)
 	tenantNamespace := os.Getenv(envTenantNamespace)
 	if err := (controller.NewTenantReconciler(
 		mgr,
@@ -437,6 +437,8 @@ func setupNetworkingControllers(
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
+
+	targetCluster := targetClusterFromManager(mgr)
 
 	// Get namespace from environment (single namespace for all networking resources)
 	networkingNamespace := os.Getenv(envNetworkingNamespace)
@@ -460,20 +462,14 @@ func setupNetworkingControllers(
 			localMgr.GetClient(),
 			grpcConn,
 			networkingNamespace,
-		).SetupWithManager(localMgr); err != nil {
+		).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("virtualnetwork feedback controller: %w", err)
 		}
 	}
 
-	if err := (&controller.VirtualNetworkReconciler{
-		Client:               localMgr.GetClient(),
-		APIReader:            localMgr.GetAPIReader(),
-		Scheme:               localMgr.GetScheme(),
-		NetworkingNamespace:  networkingNamespace,
-		ProvisioningProvider: networkingProvider,
-		StatusPollInterval:   statusPollInterval,
-		MaxJobHistory:        maxJobHistory,
-	}).SetupWithManager(localMgr); err != nil {
+	if err := controller.NewVirtualNetworkReconciler(mgr, networkingNamespace, networkingProvider, statusPollInterval,
+		maxJobHistory, targetCluster,
+	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("virtualnetwork controller: %w", err)
 	}
 
@@ -483,20 +479,14 @@ func setupNetworkingControllers(
 			localMgr.GetClient(),
 			grpcConn,
 			networkingNamespace,
-		).SetupWithManager(localMgr); err != nil {
+		).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("subnet feedback controller: %w", err)
 		}
 	}
 
-	if err := (&controller.SubnetReconciler{
-		Client:               localMgr.GetClient(),
-		APIReader:            localMgr.GetAPIReader(),
-		Scheme:               localMgr.GetScheme(),
-		NetworkingNamespace:  networkingNamespace,
-		ProvisioningProvider: networkingProvider,
-		StatusPollInterval:   statusPollInterval,
-		MaxJobHistory:        maxJobHistory,
-	}).SetupWithManager(localMgr); err != nil {
+	if err := controller.NewSubnetReconciler(mgr, networkingNamespace, networkingProvider, statusPollInterval,
+		maxJobHistory, targetCluster,
+	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("subnet controller: %w", err)
 	}
 
@@ -506,20 +496,14 @@ func setupNetworkingControllers(
 			localMgr.GetClient(),
 			grpcConn,
 			networkingNamespace,
-		).SetupWithManager(localMgr); err != nil {
+		).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("securitygroup feedback controller: %w", err)
 		}
 	}
 
-	if err := (&controller.SecurityGroupReconciler{
-		Client:               localMgr.GetClient(),
-		APIReader:            localMgr.GetAPIReader(),
-		Scheme:               localMgr.GetScheme(),
-		NetworkingNamespace:  networkingNamespace,
-		ProvisioningProvider: networkingProvider,
-		StatusPollInterval:   statusPollInterval,
-		MaxJobHistory:        maxJobHistory,
-	}).SetupWithManager(localMgr); err != nil {
+	if err := controller.NewSecurityGroupReconciler(mgr, networkingNamespace, networkingProvider, statusPollInterval,
+		maxJobHistory, targetCluster,
+	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("securitygroup controller: %w", err)
 	}
 
@@ -529,20 +513,14 @@ func setupNetworkingControllers(
 			localMgr.GetClient(),
 			grpcConn,
 			networkingNamespace,
-		).SetupWithManager(localMgr); err != nil {
+		).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("publicippool feedback controller: %w", err)
 		}
 	}
 
-	if err := (&controller.PublicIPPoolReconciler{
-		Client:               localMgr.GetClient(),
-		APIReader:            localMgr.GetAPIReader(),
-		Scheme:               localMgr.GetScheme(),
-		NetworkingNamespace:  networkingNamespace,
-		ProvisioningProvider: networkingProvider,
-		StatusPollInterval:   statusPollInterval,
-		MaxJobHistory:        maxJobHistory,
-	}).SetupWithManager(localMgr); err != nil {
+	if err := controller.NewPublicIPPoolReconciler(mgr, networkingNamespace, networkingProvider, statusPollInterval,
+		maxJobHistory, targetCluster,
+	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("publicippool controller: %w", err)
 	}
 
@@ -734,7 +712,7 @@ func main() {
 		setupLog.Info("gRPC connection to fulfillment service is disabled")
 	}
 
-	maxJobHistory := helpers.GetEnvWithDefault(envMaxJobHistory, controller.DefaultMaxJobHistory, func(v int) bool {
+	maxJobHistory := helpers.GetEnvWithDefault(envMaxJobHistory, provisioning.DefaultMaxJobHistory, func(v int) bool {
 		return v >= 1
 	})
 	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)

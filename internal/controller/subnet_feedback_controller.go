@@ -15,6 +15,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -24,6 +25,7 @@ import (
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
@@ -54,8 +56,13 @@ func NewSubnetFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientCon
 }
 
 // SetupWithManager adds the reconciler to the controller manager.
-func (r *SubnetFeedbackReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+func (r *SubnetFeedbackReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	localMgr := mgr.GetLocalManager()
+	if localMgr == nil {
+		return fmt.Errorf("local manager is nil")
+	}
+
+	return ctrl.NewControllerManagedBy(localMgr).
 		Named("subnet-feedback").
 		For(&v1alpha1.Subnet{}, builder.WithPredicates(NetworkingNamespacePredicate(r.networkingNamespace))).
 		Complete(r)

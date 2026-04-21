@@ -90,11 +90,11 @@ func NewClusterOrderReconciler(
 	}
 
 	if statusPollInterval <= 0 {
-		statusPollInterval = DefaultStatusPollInterval
+		statusPollInterval = provisioning.DefaultStatusPollInterval
 	}
 
 	if maxJobHistory <= 0 {
-		maxJobHistory = DefaultMaxJobHistory
+		maxJobHistory = provisioning.DefaultMaxJobHistory
 	}
 
 	return &ClusterOrderReconciler{

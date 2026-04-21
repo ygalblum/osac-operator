@@ -29,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
@@ -84,7 +85,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 	Context("Reconcile", func() {
 		It("should add finalizer on first reconcile", func() {
 			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
-			result, err := reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).NotTo(BeNil())
 
@@ -109,11 +110,11 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			}
 
 			// First reconcile adds finalizer
-			_, err := reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Second reconcile processes the resource
-			_, err = reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			updated := &osacv1alpha1.PublicIPPool{}
@@ -135,9 +136,9 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			}
 
 			// Reconcile twice (first adds finalizer, second sets annotation and provisions)
-			_, err := reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			updated := &osacv1alpha1.PublicIPPool{}
@@ -175,9 +176,9 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			}
 
 			// Reconcile twice
-			_, err := reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			updated := &osacv1alpha1.PublicIPPool{}
@@ -191,9 +192,9 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
 
 			// Reconcile twice (first adds finalizer, second processes spec)
-			_, err := reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			updated := &osacv1alpha1.PublicIPPool{}
@@ -231,11 +232,11 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			}
 
 			// Reconcile three times: finalizer, trigger, poll-success
-			_, err := reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			updated := &osacv1alpha1.PublicIPPool{}
@@ -268,11 +269,11 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			}
 
 			// Reconcile three times
-			_, err := reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			updated := &osacv1alpha1.PublicIPPool{}
@@ -296,7 +297,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			}
 
 			// Add finalizer first
-			_, err := reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Fetch the pool and set DeletionTimestamp in memory
@@ -341,7 +342,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			}
 
 			// Add finalizer first
-			_, err := reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			toDelete := &osacv1alpha1.PublicIPPool{}
@@ -441,7 +442,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			Expect(fakeClient.Create(testCtx, unmanagedPool)).To(Succeed())
 
 			key := types.NamespacedName{Name: unmanagedPool.Name, Namespace: unmanagedPool.Namespace}
-			_, err := reconciler.Reconcile(testCtx, ctrl.Request{NamespacedName: key})
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			updated := &osacv1alpha1.PublicIPPool{}

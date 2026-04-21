@@ -45,7 +45,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		reconciler = NewClusterOrderReconciler(
 			k8sClient, k8sClient, k8sClient.Scheme(),
 			clusterOrderTestNamespace, provider,
-			statusPollInterval, DefaultMaxJobHistory,
+			statusPollInterval, provisioning.DefaultMaxJobHistory,
 		)
 	})
 

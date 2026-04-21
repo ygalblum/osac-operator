@@ -28,6 +28,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
@@ -36,23 +40,51 @@ import (
 const (
 	// osacPublicIPPoolFinalizer is the finalizer for PublicIPPool resources
 	osacPublicIPPoolFinalizer = "osac.openshift.io/publicippool-finalizer"
-
-	// defaultPublicIPPoolStatusPollInterval is the default interval for polling job status
-	defaultPublicIPPoolStatusPollInterval = 30 * time.Second
-
-	// defaultPublicIPPoolMaxJobHistory is the default maximum number of jobs to keep in history
-	defaultPublicIPPoolMaxJobHistory = 10
 )
 
 // PublicIPPoolReconciler reconciles a PublicIPPool object
 type PublicIPPoolReconciler struct {
 	client.Client
-	APIReader            client.Reader
-	Scheme               *runtime.Scheme
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	// mgr and targetCluster are stored for future multi-cluster target client resolution
+	mgr                  mcmanager.Manager
 	NetworkingNamespace  string
 	ProvisioningProvider provisioning.ProvisioningProvider
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
+	targetCluster        mc.ClusterName
+}
+
+// NewPublicIPPoolReconciler creates a new reconciler for PublicIPPool resources.
+func NewPublicIPPoolReconciler(
+	mgr mcmanager.Manager,
+	networkingNamespace string,
+	provisioningProvider provisioning.ProvisioningProvider,
+	statusPollInterval time.Duration,
+	maxJobHistory int,
+	targetCluster mc.ClusterName,
+) *PublicIPPoolReconciler {
+	if mgr == nil {
+		panic("mgr must not be nil")
+	}
+	if statusPollInterval <= 0 {
+		statusPollInterval = provisioning.DefaultStatusPollInterval
+	}
+	if maxJobHistory <= 0 {
+		maxJobHistory = provisioning.DefaultMaxJobHistory
+	}
+	return &PublicIPPoolReconciler{
+		Client:               mgr.GetLocalManager().GetClient(),
+		APIReader:            mgr.GetLocalManager().GetAPIReader(),
+		Scheme:               mgr.GetLocalManager().GetScheme(),
+		mgr:                  mgr,
+		NetworkingNamespace:  networkingNamespace,
+		ProvisioningProvider: provisioningProvider,
+		StatusPollInterval:   statusPollInterval,
+		MaxJobHistory:        maxJobHistory,
+		targetCluster:        targetCluster,
+	}
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicippools,verbs=get;list;watch;create;update;patch;delete
@@ -61,7 +93,7 @@ type PublicIPPoolReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-func (r *PublicIPPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *PublicIPPoolReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	pool := &v1alpha1.PublicIPPool{}
@@ -206,7 +238,7 @@ func (r *PublicIPPoolReconciler) handleProvisioning(ctx context.Context, pool *v
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, pool,
 		&provisioning.State{Jobs: &pool.Status.Jobs, DesiredConfigVersion: pool.Status.DesiredConfigVersion},
-		r.getMaxJobHistory(), r.getStatusPollInterval(),
+		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
 			OnFailed:  func(_ string) { pool.Status.Phase = v1alpha1.PublicIPPoolPhaseFailed },
 			OnSuccess: func(_ provisioning.ProvisionStatus) { pool.Status.Phase = v1alpha1.PublicIPPoolPhaseReady },
@@ -239,14 +271,14 @@ func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool 
 		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, pool)
 		if err != nil {
 			log.Error(err, "failed to trigger deprovisioning")
-			return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 
 		// Handle provider action
 		switch result.Action {
 		case provisioning.DeprovisionWaiting:
 			log.Info("deprovisioning not ready, requeueing")
-			return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 
 		case provisioning.DeprovisionSkipped:
 			log.Info("provider skipped deprovisioning")
@@ -261,9 +293,9 @@ func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool 
 				Message:                "Deprovisioning job triggered",
 				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
 			}
-			pool.Status.Jobs = provisioning.AppendJob(pool.Status.Jobs, newJob, r.getMaxJobHistory())
+			pool.Status.Jobs = provisioning.AppendJob(pool.Status.Jobs, newJob, r.MaxJobHistory)
 			log.Info("deprovisioning job triggered", "jobID", result.JobID)
-			return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 	}
 
@@ -274,7 +306,7 @@ func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool 
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
 		provisioning.UpdateJob(pool.Status.Jobs, updatedJob)
-		return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Update job status
@@ -286,7 +318,7 @@ func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {
 		log.Info("deprovision job still running", "jobID", latestDeprovisionJob.JobID, "state", status.State)
-		return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Job reached terminal state
@@ -301,7 +333,7 @@ func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool 
 			"jobID", latestDeprovisionJob.JobID,
 			"state", status.State,
 			"message", updatedJob.Message)
-		return ctrl.Result{RequeueAfter: r.getStatusPollInterval()}, nil
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	log.Info("deprovision job did not succeed, allowing process to continue",
@@ -311,26 +343,12 @@ func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool 
 	return ctrl.Result{}, nil
 }
 
-// getMaxJobHistory returns the configured max job history or the default.
-func (r *PublicIPPoolReconciler) getMaxJobHistory() int {
-	if r.MaxJobHistory > 0 {
-		return r.MaxJobHistory
-	}
-	return defaultPublicIPPoolMaxJobHistory
-}
-
-// getStatusPollInterval returns the configured status poll interval or the default.
-func (r *PublicIPPoolReconciler) getStatusPollInterval() time.Duration {
-	if r.StatusPollInterval > 0 {
-		return r.StatusPollInterval
-	}
-	return defaultPublicIPPoolStatusPollInterval
-}
-
 // SetupWithManager sets up the controller with the Manager.
-func (r *PublicIPPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.PublicIPPool{}).
-		WithEventFilter(NetworkingNamespacePredicate(r.NetworkingNamespace)).
+func (r *PublicIPPoolReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	return mcbuilder.ControllerManagedBy(mgr).
+		For(&v1alpha1.PublicIPPool{},
+			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false)).
 		Complete(r)
 }

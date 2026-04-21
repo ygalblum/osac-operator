@@ -521,7 +521,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			})
 
 			It("should use default max history when set", func() {
-				reconciler := NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, DefaultMaxJobHistory, mcmanager.LocalCluster)
+				reconciler := NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, provisioning.DefaultMaxJobHistory, mcmanager.LocalCluster)
 				jobs := []osacv1alpha1.JobStatus{}
 				// Add 15 jobs
 				baseTime := time.Now().UTC()
@@ -535,7 +535,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					jobs = provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
 				}
 				// Should keep only last 10
-				Expect(jobs).To(HaveLen(DefaultMaxJobHistory))
+				Expect(jobs).To(HaveLen(provisioning.DefaultMaxJobHistory))
 			})
 		})
 
