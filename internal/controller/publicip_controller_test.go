@@ -35,12 +35,14 @@ import (
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
 
-// Tests for the PublicIPPool provisioning controller.
+// Tests for the PublicIP provisioning controller.
 //
 // Key concepts for understanding these tests:
 //
-//   - Unlike PublicIP (which inherits strategy from its parent pool), PublicIPPool reads
-//     the implementation strategy from its own spec.implementationStrategy field.
+//   - A PublicIP belongs to a parent PublicIPPool. The relationship uses fulfillment-service
+//     UUIDs, not K8s object names: publicIP.spec.pool contains a UUID, and the parent
+//     PublicIPPool CR carries that UUID in its osac.openshift.io/publicippool-uuid label.
+//     The controller resolves the parent by listing pools with a matching label.
 //
 //   - The reconcile loop requires multiple passes because each pass does one thing and
 //     returns: first pass adds the finalizer (metadata write), second pass processes the
@@ -52,14 +54,20 @@ import (
 //   - The mock provisioning provider (defined in computeinstance_provisioning_test.go)
 //     simulates AAP job triggers and status polls. By default it returns success; tests
 //     override specific funcs to simulate failures or running states.
-var _ = Describe("PublicIPPoolReconciler", func() {
+var _ = Describe("PublicIPReconciler", func() {
 	var (
-		reconciler   *PublicIPPoolReconciler
+		reconciler   *PublicIPReconciler
 		mockProvider *mockProvisioningProvider
 		fakeClient   client.Client
 		testCtx      context.Context
-		pool         *osacv1alpha1.PublicIPPool
+		publicIP     *osacv1alpha1.PublicIP
+		parentPool   *osacv1alpha1.PublicIPPool
 		testScheme   *runtime.Scheme
+	)
+
+	const (
+		testNamespace = "test-namespace"
+		testPoolUUID  = "pool-uuid-123"
 	)
 
 	BeforeEach(func() {
@@ -68,10 +76,15 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 		Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
 		Expect(scheme.AddToScheme(testScheme)).To(Succeed())
 
-		pool = &osacv1alpha1.PublicIPPool{
+		// The parent pool has a K8s name ("pool-k8s-name") that differs from the UUID
+		// ("pool-uuid-123") to verify the controller uses label-based lookup, not name-based.
+		parentPool = &osacv1alpha1.PublicIPPool{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-pool",
-				Namespace: "test-namespace",
+				Name:      "pool-k8s-name",
+				Namespace: testNamespace,
+				Labels: map[string]string{
+					osacPublicIPPoolIDLabel: testPoolUUID,
+				},
 			},
 			Spec: osacv1alpha1.PublicIPPoolSpec{
 				CIDRs:                  []string{"192.168.1.0/24"},
@@ -80,19 +93,30 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			},
 		}
 
+		// The PublicIP references the parent pool by UUID, not by K8s name.
+		publicIP = &osacv1alpha1.PublicIP{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-publicip",
+				Namespace: testNamespace,
+			},
+			Spec: osacv1alpha1.PublicIPSpec{
+				Pool: testPoolUUID,
+			},
+		}
+
 		fakeClient = fake.NewClientBuilder().
 			WithScheme(testScheme).
-			WithObjects(pool).
-			WithStatusSubresource(&osacv1alpha1.PublicIPPool{}).
+			WithObjects(publicIP, parentPool).
+			WithStatusSubresource(&osacv1alpha1.PublicIP{}).
 			Build()
 
 		mockProvider = &mockProvisioningProvider{name: "mock-aap"}
 
-		reconciler = &PublicIPPoolReconciler{
+		reconciler = &PublicIPReconciler{
 			Client:               fakeClient,
 			APIReader:            fakeClient,
 			Scheme:               testScheme,
-			NetworkingNamespace:  "test-namespace",
+			NetworkingNamespace:  testNamespace,
 			ProvisioningProvider: mockProvider,
 			StatusPollInterval:   1 * time.Second,
 			MaxJobHistory:        10,
@@ -101,19 +125,18 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 
 	Context("Reconcile", func() {
 		It("should add finalizer on first reconcile", func() {
-			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).NotTo(BeNil())
 
-			updated := &osacv1alpha1.PublicIPPool{}
+			updated := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-
-			Expect(updated.Finalizers).To(ContainElement(osacPublicIPPoolFinalizer))
+			Expect(updated.Finalizers).To(ContainElement(osacPublicIPFinalizer))
 		})
 
 		It("should set phase to Progressing initially", func() {
-			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
 			// Keep the job in Running state so the phase stays Progressing
 			// (a Succeeded job would transition to Ready)
@@ -131,17 +154,104 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Pass 2: reads strategy from spec, triggers provisioning, sets Progressing
+			// Pass 2: resolves parent pool, triggers provisioning, sets Progressing
 			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
-			updated := &osacv1alpha1.PublicIPPool{}
+			updated := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPoolPhaseProgressing))
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseProgressing))
+		})
+
+		It("should set implementation-strategy annotation from parent pool", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			// Pass 1: adds finalizer
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Pass 2: resolves parent pool and copies its implementation strategy
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("metallb-l2"))
+		})
+
+		It("should requeue when parent PublicIPPool is not found", func() {
+			// This PublicIP references a pool UUID that doesn't exist as a label
+			// on any PublicIPPool CR. The controller should requeue and wait for
+			// the pool to appear (it may not have been reconciled to K8s yet).
+			orphanIP := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "orphan-publicip",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool: "nonexistent-pool-uuid",
+				},
+			}
+			Expect(fakeClient.Create(testCtx, orphanIP)).To(Succeed())
+
+			key := types.NamespacedName{Name: orphanIP.Name, Namespace: orphanIP.Namespace}
+
+			// Pass 1: adds finalizer
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Pass 2: parent pool not found, requeues after precondition interval
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+
+		It("should use default implementation strategy when pool has none", func() {
+			// A pool with no ImplementationStrategy in its spec should fall back
+			// to defaultPublicIPPoolImplementationStrategy ("metallb-l2").
+			poolNoStrategy := &osacv1alpha1.PublicIPPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pool-no-strategy",
+					Namespace: testNamespace,
+					Labels: map[string]string{
+						osacPublicIPPoolIDLabel: "pool-no-strategy-uuid",
+					},
+				},
+				Spec: osacv1alpha1.PublicIPPoolSpec{
+					CIDRs:    []string{"10.0.0.0/24"},
+					IPFamily: "IPv4",
+				},
+			}
+			Expect(fakeClient.Create(testCtx, poolNoStrategy)).To(Succeed())
+
+			ipNoStrategy := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ip-no-strategy",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool: "pool-no-strategy-uuid",
+				},
+			}
+			Expect(fakeClient.Create(testCtx, ipNoStrategy)).To(Succeed())
+
+			key := types.NamespacedName{Name: ipNoStrategy.Name, Namespace: ipNoStrategy.Namespace}
+
+			// Pass 1: adds finalizer
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Pass 2: inherits default strategy since pool has none
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(defaultPublicIPPoolImplementationStrategy))
 		})
 
 		It("should set ConfigurationApplied condition to True", func() {
-			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
 			// Pass 1: finalizer, Pass 2: process spec and set condition
 			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
@@ -149,11 +259,11 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
-			updated := &osacv1alpha1.PublicIPPool{}
+			updated := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
 
-			condition := osacv1alpha1.GetPublicIPPoolStatusCondition(
-				updated, osacv1alpha1.PublicIPPoolConditionConfigurationApplied,
+			condition := osacv1alpha1.GetPublicIPStatusCondition(
+				updated, osacv1alpha1.PublicIPConditionConfigurationApplied,
 			)
 			Expect(condition).NotTo(BeNil())
 			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
@@ -161,7 +271,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 		})
 
 		It("should set phase to Ready on successful provision", func() {
-			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
 			mockProvider.triggerProvisionFunc = func(
 				ctx context.Context, resource client.Object,
@@ -191,13 +301,13 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
-			updated := &osacv1alpha1.PublicIPPool{}
+			updated := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPoolPhaseReady))
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseReady))
 		})
 
 		It("should set phase to Failed on provision failure", func() {
-			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
 			mockProvider.triggerProvisionFunc = func(
 				ctx context.Context, resource client.Object,
@@ -228,9 +338,9 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
-			updated := &osacv1alpha1.PublicIPPool{}
+			updated := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPoolPhaseFailed))
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseFailed))
 		})
 
 		// Deletion tests call handleDelete directly because the fake client does not
@@ -238,7 +348,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 		// normal Reconcile, then set DeletionTimestamp in memory and call handleDelete.
 
 		It("should trigger deprovision on delete", func() {
-			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
 			deprovisionCalled := false
 			mockProvider.triggerDeprovisionFunc = func(
@@ -257,7 +367,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Simulate K8s delete by setting DeletionTimestamp in memory
-			toDelete := &osacv1alpha1.PublicIPPool{}
+			toDelete := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
 			now := metav1.Now()
 			toDelete.DeletionTimestamp = &now
@@ -266,6 +376,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(deprovisionCalled).To(BeTrue())
+			Expect(toDelete.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseDeleting))
 
 			latestJob := provisioning.FindLatestJobByType(toDelete.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestJob).NotTo(BeNil())
@@ -273,7 +384,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 		})
 
 		It("should remove finalizer after successful deprovision", func() {
-			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
 			mockProvider.triggerDeprovisionFunc = func(
 				ctx context.Context, resource client.Object,
@@ -295,46 +406,41 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 				}, nil
 			}
 
-			// Add finalizer first
+			// Add finalizer via normal reconcile
 			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
-			toDelete := &osacv1alpha1.PublicIPPool{}
+			toDelete := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
-
 			now := metav1.Now()
 			toDelete.DeletionTimestamp = &now
 
-			// First handleDelete triggers deprovision job
+			// First call triggers the deprovision job
 			_, err = reconciler.handleDelete(testCtx, toDelete)
 			Expect(err).NotTo(HaveOccurred())
 
-			// Second handleDelete polls status and removes finalizer
+			// Second call polls status (Succeeded) and removes the finalizer
 			_, _ = reconciler.handleDelete(testCtx, toDelete)
 
-			// Verify finalizer was removed from in-memory object
-			Expect(toDelete.Finalizers).NotTo(ContainElement(osacPublicIPPoolFinalizer))
+			Expect(toDelete.Finalizers).NotTo(ContainElement(osacPublicIPFinalizer))
 		})
 
-		It("should still handle delete for unmanaged pool with finalizer", func() {
-			// Edge case: a pool was managed (has finalizer), then an admin marked
+		It("should still handle delete for unmanaged PublicIP with finalizer", func() {
+			// Edge case: a PublicIP was managed (has finalizer), then an admin marked
 			// it unmanaged. The management-state guard in Reconcile skips processing
 			// for non-deleted resources, but deletion must still proceed to clean up
 			// the AAP-provisioned resources and remove the finalizer.
-			managedThenUnmanaged := &osacv1alpha1.PublicIPPool{
+			managedThenUnmanaged := &osacv1alpha1.PublicIP{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "managed-then-unmanaged",
-					Namespace: "test-namespace",
+					Namespace: testNamespace,
 					Annotations: map[string]string{
 						osacManagementStateAnnotation: ManagementStateUnmanaged,
 					},
-					Finalizers: []string{osacPublicIPPoolFinalizer},
+					Finalizers: []string{osacPublicIPFinalizer},
 				},
-				Spec: osacv1alpha1.PublicIPPoolSpec{
-
-					CIDRs:                  []string{"10.0.0.0/24"},
-					IPFamily:               "IPv4",
-					ImplementationStrategy: "metallb-l2",
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool: testPoolUUID,
 				},
 			}
 			Expect(fakeClient.Create(testCtx, managedThenUnmanaged)).To(Succeed())
@@ -351,60 +457,45 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 				}, nil
 			}
 
-			// Fetch from the fake client, then set DeletionTimestamp in memory
-			// and call handleDelete directly (fake client does not support
-			// DeletionTimestamp via Update, so we test the in-memory behavior).
-			fetched := &osacv1alpha1.PublicIPPool{}
+			fetched := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, fetched)).To(Succeed())
-
 			now := metav1.Now()
 			fetched.DeletionTimestamp = &now
 
-			// Verify the Reconcile guard: with DeletionTimestamp set, the
-			// unmanaged annotation must NOT cause an early return.
-			// DeletionTimestamp.IsZero() is false, so the guard is skipped
-			// and we reach the delete branch.
+			// Verify the guard logic: DeletionTimestamp is set, so the unmanaged
+			// annotation is ignored and the delete branch runs.
 			Expect(fetched.ObjectMeta.DeletionTimestamp.IsZero()).To(BeFalse())
 
-			// Call handleDelete directly. The DeprovisionSkipped path removes
-			// the finalizer in memory. The subsequent r.Update will fail on
-			// the fake client (DeletionTimestamp is immutable), but the
-			// important assertion is that deprovision ran and the finalizer
-			// was removed from the in-memory object.
 			_, _ = reconciler.handleDelete(testCtx, fetched)
 
 			Expect(deprovisionCalled).To(BeTrue())
-			Expect(fetched.Finalizers).NotTo(ContainElement(osacPublicIPPoolFinalizer))
+			Expect(fetched.Finalizers).NotTo(ContainElement(osacPublicIPFinalizer))
 		})
 
-		It("should ignore pool with management-state unmanaged annotation", func() {
-			// When a pool has the unmanaged annotation and is NOT being deleted,
+		It("should ignore PublicIP with management-state unmanaged annotation", func() {
+			// When a PublicIP has the unmanaged annotation and is NOT being deleted,
 			// the controller should skip it entirely: no finalizer, no phase change.
-			unmanagedPool := &osacv1alpha1.PublicIPPool{
+			unmanagedIP := &osacv1alpha1.PublicIP{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "unmanaged-pool",
-					Namespace: "test-namespace",
+					Name:      "unmanaged-ip",
+					Namespace: testNamespace,
 					Annotations: map[string]string{
 						osacManagementStateAnnotation: ManagementStateUnmanaged,
 					},
 				},
-				Spec: osacv1alpha1.PublicIPPoolSpec{
-
-					CIDRs:                  []string{"10.0.0.0/24"},
-					IPFamily:               "IPv4",
-					ImplementationStrategy: "metallb-l2",
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool: testPoolUUID,
 				},
 			}
-			Expect(fakeClient.Create(testCtx, unmanagedPool)).To(Succeed())
+			Expect(fakeClient.Create(testCtx, unmanagedIP)).To(Succeed())
 
-			key := types.NamespacedName{Name: unmanagedPool.Name, Namespace: unmanagedPool.Namespace}
+			key := types.NamespacedName{Name: unmanagedIP.Name, Namespace: unmanagedIP.Namespace}
 			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
-			updated := &osacv1alpha1.PublicIPPool{}
+			updated := &osacv1alpha1.PublicIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
 
-			// Verify no finalizer was added (controller skipped it)
 			Expect(updated.Finalizers).To(BeEmpty())
 			Expect(updated.Status.Phase).To(BeEmpty())
 		})
@@ -416,8 +507,8 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 	// immediately instead of waiting for the backoff to expire.
 	Context("backoff on failure", func() {
 		It("should backoff when latest job failed with matching ConfigVersion", func() {
-			pool.Status.DesiredConfigVersion = testConfigVersion
-			pool.Status.Jobs = []osacv1alpha1.JobStatus{
+			publicIP.Status.DesiredConfigVersion = testConfigVersion
+			publicIP.Status.Jobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -428,7 +519,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 				},
 			}
 
-			result, err := reconciler.handleProvisioning(testCtx, pool)
+			result, err := reconciler.handleProvisioning(testCtx, publicIP)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 			Expect(result.RequeueAfter).To(BeNumerically("<=", provisioning.BackoffMaxDelay))
@@ -444,8 +535,10 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 				}, nil
 			}
 
-			pool.Status.DesiredConfigVersion = testConfigVersionUpdated
-			pool.Status.Jobs = []osacv1alpha1.JobStatus{
+			// The desired version is "version-2" but the failed job was for "version-1",
+			// meaning the spec changed. The controller should retry immediately.
+			publicIP.Status.DesiredConfigVersion = testConfigVersionUpdated
+			publicIP.Status.Jobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -456,11 +549,11 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 				},
 			}
 
-			result, err := reconciler.handleProvisioning(testCtx, pool)
+			result, err := reconciler.handleProvisioning(testCtx, publicIP)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(pool.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(publicIP.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("retry-job"))
 		})

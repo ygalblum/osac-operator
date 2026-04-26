@@ -429,8 +429,8 @@ func setupTenantController(mgr mcmanager.Manager) error {
 	return nil
 }
 
-// setupNetworkingControllers registers the VirtualNetwork, Subnet, SecurityGroup, and PublicIPPool controllers
-// along with their feedback controllers when grpcConn is set.
+// setupNetworkingControllers registers the VirtualNetwork, Subnet, SecurityGroup, PublicIPPool,
+// and PublicIP controllers along with their feedback controllers when grpcConn is set.
 func setupNetworkingControllers(
 	mgr mcmanager.Manager,
 	grpcConn *grpc.ClientConn,
@@ -522,6 +522,14 @@ func setupNetworkingControllers(
 		maxJobHistory, targetCluster,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("publicippool controller: %w", err)
+	}
+
+	// Setup PublicIP controller
+	// Feedback controller is tracked separately in MGMT-23908.
+	if err := controller.NewPublicIPReconciler(mgr, networkingNamespace, networkingProvider, statusPollInterval,
+		maxJobHistory, targetCluster,
+	).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("publicip controller: %w", err)
 	}
 
 	return nil

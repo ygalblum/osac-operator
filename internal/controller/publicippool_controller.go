@@ -42,12 +42,19 @@ const (
 	osacPublicIPPoolFinalizer = "osac.openshift.io/publicippool-finalizer"
 )
 
-// PublicIPPoolReconciler reconciles a PublicIPPool object
+// PublicIPPoolReconciler reconciles PublicIPPool CRs created by the fulfillment-service.
+//
+// A PublicIPPool defines a range of public IP addresses (CIDRs) that can be allocated
+// as individual PublicIP resources. Unlike PublicIP (which inherits its strategy from
+// the parent pool), PublicIPPool reads the implementation strategy from its own spec.
+//
+// The controller adds a finalizer, triggers AAP provisioning/deprovisioning jobs via
+// the shared provisioning lifecycle, and transitions phases:
+// "" -> Progressing -> Ready/Failed; on delete: Deleting.
 type PublicIPPoolReconciler struct {
 	client.Client
-	APIReader client.Reader
-	Scheme    *runtime.Scheme
-	// mgr and targetCluster are stored for future multi-cluster target client resolution
+	APIReader            client.Reader
+	Scheme               *runtime.Scheme
 	mgr                  mcmanager.Manager
 	NetworkingNamespace  string
 	ProvisioningProvider provisioning.ProvisioningProvider
@@ -91,8 +98,9 @@ func NewPublicIPPoolReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicippools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicippools/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
+// Reconcile handles create/update/delete for a PublicIPPool CR.
+// On create/update it ensures a finalizer, reads the implementation strategy from spec,
+// and runs provisioning. On delete it triggers deprovisioning and removes the finalizer.
 func (r *PublicIPPoolReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -131,6 +139,8 @@ func (r *PublicIPPoolReconciler) Reconcile(ctx context.Context, req mcreconcile.
 	return res, err
 }
 
+// handleUpdate processes a non-deleted PublicIPPool: adds finalizer, reads the
+// implementation strategy from the pool's own spec, and runs provisioning.
 func (r *PublicIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alpha1.PublicIPPool) (ctrl.Result, error) {
 	// Add finalizer if not present
 	if controllerutil.AddFinalizer(pool, osacPublicIPPoolFinalizer) {
@@ -148,10 +158,10 @@ func (r *PublicIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alpha
 		pool.Status.Phase = v1alpha1.PublicIPPoolPhaseProgressing
 	}
 
-	// Read implementation strategy from spec, defaulting to metallb-l2
+	// Read implementation strategy from spec
 	implementationStrategy := pool.Spec.ImplementationStrategy
 	if implementationStrategy == "" {
-		implementationStrategy = "metallb-l2"
+		implementationStrategy = defaultPublicIPPoolImplementationStrategy
 	}
 
 	// Compute desired config version from spec and implementation strategy
@@ -184,6 +194,8 @@ func (r *PublicIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alpha
 	return r.handleProvisioning(ctx, pool)
 }
 
+// handleDelete sets the Deleting phase, runs deprovisioning, and removes the finalizer
+// once deprovisioning completes (or is skipped).
 func (r *PublicIPPoolReconciler) handleDelete(ctx context.Context, pool *v1alpha1.PublicIPPool) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting public IP pool")
@@ -210,8 +222,8 @@ func (r *PublicIPPoolReconciler) handleDelete(ctx context.Context, pool *v1alpha
 	return ctrl.Result{}, nil
 }
 
-// handleProvisioning manages the provisioning job lifecycle for a PublicIPPool.
-// Uses shared RunProvisioningLifecycle with config-version-based backoff on failure.
+// handleProvisioning delegates to the shared provisioning lifecycle, which triggers
+// an AAP job (e.g., osac-create-public-ip-pool) and polls its status until completion.
 func (r *PublicIPPoolReconciler) handleProvisioning(ctx context.Context, pool *v1alpha1.PublicIPPool) (ctrl.Result, error) {
 	if r.ProvisioningProvider == nil {
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping provisioning")
@@ -233,8 +245,9 @@ func (r *PublicIPPoolReconciler) handleProvisioning(ctx context.Context, pool *v
 	)
 }
 
-// handleDeprovisioning manages the deprovisioning job lifecycle for a PublicIPPool.
-// It triggers deprovisioning if needed and polls job status until completion.
+// handleDeprovisioning triggers an AAP deprovisioning job (e.g., osac-delete-public-ip-pool)
+// and polls its status. On failure, it either blocks deletion (to prevent orphaned
+// resources) or allows the process to continue, depending on provider policy.
 func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool *v1alpha1.PublicIPPool) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -326,7 +339,8 @@ func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool 
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
+// SetupWithManager registers this controller with the multicluster manager.
+// It watches PublicIPPool CRs in the networking namespace on the local cluster only.
 func (r *PublicIPPoolReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&v1alpha1.PublicIPPool{},

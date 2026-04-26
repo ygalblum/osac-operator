@@ -33,4 +33,8 @@ const (
 	// This is derived from the NetworkClass and used by AAP playbooks to select the appropriate role
 	// (e.g., "cudn" -> cudn_virtual_network or cudn_subnet role).
 	osacImplementationStrategyAnnotation = osacPrefix + "/implementation-strategy"
+
+	// defaultPublicIPPoolImplementationStrategy is the fallback strategy when none is specified.
+	// Used by PublicIPPool (from its own spec) and PublicIP (inherited from parent pool).
+	defaultPublicIPPoolImplementationStrategy = "metallb-l2"
 )
