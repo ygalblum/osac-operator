@@ -132,8 +132,6 @@ func (r *PublicIPPoolReconciler) Reconcile(ctx context.Context, req mcreconcile.
 }
 
 func (r *PublicIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alpha1.PublicIPPool) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
 	// Add finalizer if not present
 	if controllerutil.AddFinalizer(pool, osacPublicIPPoolFinalizer) {
 		if err := r.Update(ctx, pool); err != nil {
@@ -154,22 +152,6 @@ func (r *PublicIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alpha
 	implementationStrategy := pool.Spec.ImplementationStrategy
 	if implementationStrategy == "" {
 		implementationStrategy = "metallb-l2"
-	}
-
-	// Add implementation-strategy annotation if not present or different.
-	// This allows AAP playbooks to select the appropriate role without doing lookups.
-	if pool.Annotations == nil {
-		pool.Annotations = make(map[string]string)
-	}
-	if pool.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
-		pool.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
-		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
-		if err := r.Update(ctx, pool); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.Get(ctx, client.ObjectKeyFromObject(pool), pool); err != nil {
-			return ctrl.Result{}, err
-		}
 	}
 
 	// Compute desired config version from spec and implementation strategy
