@@ -1166,7 +1166,11 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
 
-			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned).Status).To(Equal(metav1.ConditionTrue))
+			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonInfrastructureReady))
+			Expect(provCond.Message).To(Equal("All infrastructure resources provisioned successfully"))
+
 			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionReady).Status).To(Equal(metav1.ConditionTrue))
 			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired).Status).To(Equal(metav1.ConditionFalse))
 		})
@@ -1179,7 +1183,11 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
 
-			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned).Status).To(Equal(metav1.ConditionTrue))
+			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonInfrastructureReady))
+			Expect(provCond.Message).To(Equal("All infrastructure resources provisioned successfully"))
+
 			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionReady).Status).To(Equal(metav1.ConditionFalse))
 			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired).Status).To(Equal(metav1.ConditionFalse))
 		})
@@ -1199,7 +1207,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired).Status).To(Equal(metav1.ConditionTrue))
 		})
 
-		It("sets Provisioned=False when VM is in Provisioning state (storage not yet allocated)", func() {
+		It("sets Provisioned=False with ProvisioningStorage reason when VM is in Provisioning state", func() {
+			instance.Spec.BootDisk.SizeGiB = 20
 			kv := &kubevirtv1.VirtualMachine{
 				Status: kubevirtv1.VirtualMachineStatus{
 					PrintableStatus: kubevirtv1.VirtualMachineStatusProvisioning,
@@ -1207,7 +1216,11 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
 
-			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned).Status).To(Equal(metav1.ConditionFalse))
+			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonProvisioningStorage))
+			Expect(provCond.Message).To(Equal("Creating DataVolumes for boot disk (20GiB)"))
+
 			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionReady).Status).To(Equal(metav1.ConditionFalse))
 			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired).Status).To(Equal(metav1.ConditionFalse))
 		})
