@@ -3,11 +3,11 @@ module github.com/osac-project/osac-operator
 go 1.25.0
 
 require (
-	github.com/osac-project/osac-operator/api v0.0.0
 	github.com/go-logr/logr v1.4.3
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
 	github.com/openshift/hypershift/api v0.0.0-20250331235933-616a2fae81ae
+	github.com/osac-project/osac-operator/api v0.0.0
 	github.com/ovn-org/ovn-kubernetes/go-controller v0.0.0-20251211123925-6d83b2b6e183
 	github.com/stoewer/go-strcase v1.3.1
 	golang.org/x/oauth2 v0.36.0
