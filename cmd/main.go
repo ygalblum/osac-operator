@@ -440,7 +440,8 @@ func setupTenantController(mgr mcmanager.Manager, maxJobHistory int) error {
 		providerType = provisioning.ProviderTypeAAP
 	}
 
-	if providerType == provisioning.ProviderTypeAAP {
+	switch providerType {
+	case provisioning.ProviderTypeAAP:
 		aapURL := os.Getenv(envAAPURL)
 		aapToken := os.Getenv(envAAPToken)
 		if aapURL != "" && aapToken != "" {
@@ -460,6 +461,10 @@ func setupTenantController(mgr mcmanager.Manager, maxJobHistory int) error {
 				"provisionTemplate", tenantProvisionTemplate,
 				"deprovisionTemplate", tenantDeprovisionTemplate)
 		}
+	case provisioning.ProviderTypeEDA:
+		setupLog.Info("EDA provider does not support tenant storage provisioning, controller will wait for manual StorageClass creation")
+	default:
+		return fmt.Errorf("unknown provisioning provider type: %s", providerType)
 	}
 
 	if err := (controller.NewTenantReconciler(
