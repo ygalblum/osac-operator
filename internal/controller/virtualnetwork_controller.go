@@ -90,6 +90,7 @@ func NewVirtualNetworkReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -213,6 +214,20 @@ func (r *VirtualNetworkReconciler) handleDelete(ctx context.Context, vnet *v1alp
 	// Base finalizer has already been removed, cleanup complete
 	if !controllerutil.ContainsFinalizer(vnet, osacVirtualNetworkFinalizer) {
 		return ctrl.Result{}, nil
+	}
+
+	// Check if any Subnets are still referencing this VirtualNetwork
+	subnetList := &v1alpha1.SubnetList{}
+	if err := r.List(ctx, subnetList, client.InNamespace(vnet.Namespace)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list subnets: %w", err)
+	}
+
+	for _, subnet := range subnetList.Items {
+		if subnet.Spec.VirtualNetwork == vnet.Name {
+			err := fmt.Errorf("VirtualNetwork is still referenced by Subnet %s", subnet.Name)
+			log.Info("cannot delete VirtualNetwork", "error", err.Error())
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Handle deprovisioning

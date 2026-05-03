@@ -387,6 +387,40 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 	})
 
 	Context("handleDelete", func() {
+		It("should block deletion when referenced by a Subnet", func() {
+			vnet.Finalizers = []string{osacVirtualNetworkFinalizer}
+			vnet.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+
+			// Create the VirtualNetwork in the cluster
+			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+
+			// Create a Subnet that references the VirtualNetwork
+			subnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-subnet-ref",
+					Namespace: vnet.Namespace,
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: vnet.Name,
+					IPv4CIDR:       "10.0.1.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+
+			// Ensure cleanup of the Subnet
+			defer func() {
+				_ = k8sClient.Delete(ctx, subnet)
+			}()
+
+			// Try to delete the VirtualNetwork
+			_, err := reconciler.handleDelete(ctx, vnet)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("VirtualNetwork is still referenced by Subnet test-subnet-ref"))
+
+			// Verify that the finalizer was NOT removed
+			Expect(vnet.Finalizers).To(ContainElement(osacVirtualNetworkFinalizer))
+		})
+
 		It("should trigger deprovision job on deletion", func() {
 			vnet.Finalizers = []string{osacVirtualNetworkFinalizer}
 			vnet.DeletionTimestamp = &metav1.Time{Time: time.Now()}
