@@ -20,6 +20,7 @@ OSAC operator is a Kubernetes operator that reconciles infrastructure resources 
 - **Never edit** `config/crd/`, `zz_generated.deepcopy.go`, or `internal/api/` — all generated
 - **Always `buf generate`** after updating the module version in `buf.gen.yaml`
 - **Commit message format**: `MGMT-XXXXX: description of change`
+- **Always `make lint`** after changing any Go code — fix all issues before proceeding
 - Run `make lint test` before committing
 
 ## Development Commands

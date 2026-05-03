@@ -1,0 +1,14 @@
+# Subject namespace is omitted: kustomize's namespace transformer injects it
+# from the base namespace (osac). In installer overlays the replacement pins
+# it back to osac (the console-proxy SA always lives there).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: osac-console-proxy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: osac-console-proxy
+subjects:
+- kind: ServiceAccount
+  name: osac-console-proxy

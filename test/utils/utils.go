@@ -104,15 +104,50 @@ func InstallCertManager() error {
 	return err
 }
 
-// LoadImageToKindClusterWithName loads a local docker image to the kind cluster
+// LoadImageToKindClusterWithName loads a local container image to the kind cluster.
+// When podman is the container tool, it uses `podman save | kind load image-archive`
+// because `kind load docker-image` does not work with podman-built images.
 func LoadImageToKindClusterWithName(name string) error {
 	cluster := "kind"
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
 	}
-	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
-	cmd := exec.Command("kind", kindOptions...)
+
+	containerTool := detectContainerTool()
+	if containerTool == "podman" {
+		return loadImageViaArchive(name, cluster, containerTool)
+	}
+
+	cmd := exec.Command("kind", "load", "docker-image", name, "--name", cluster)
 	_, err := Run(cmd)
+	return err
+}
+
+func detectContainerTool() string {
+	if v, ok := os.LookupEnv("CONTAINER_TOOL"); ok {
+		return v
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		return "podman"
+	}
+	return "docker"
+}
+
+func loadImageViaArchive(name, cluster, tool string) error {
+	f, err := os.CreateTemp("", "kind-image-*.tar")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer func() { _ = os.Remove(f.Name()) }()
+	_ = f.Close()
+
+	cmd := exec.Command(tool, "save", name, "-o", f.Name())
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+
+	cmd = exec.Command("kind", "load", "image-archive", f.Name(), "--name", cluster)
+	_, err = Run(cmd)
 	return err
 }
 

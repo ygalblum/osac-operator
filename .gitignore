@@ -6,7 +6,7 @@
 *.dylib
 bin/*
 main
-Dockerfile.cross
+Containerfile.cross
 Dockerfile.manifests
 dist/
 

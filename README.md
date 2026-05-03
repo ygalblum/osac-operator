@@ -121,6 +121,101 @@ enabled.
 See `config/samples/osac-config-secret.yaml` for a complete configuration
 example.
 
+## Console Proxy
+
+The console proxy (`cmd/console-proxy/`) is an HTTPS/WebSocket server that
+gives clients access to KubeVirt VM serial consoles through the OSAC API. It
+registers itself as a Kubernetes
+[aggregated API server](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/apiserver-aggregation/)
+under `console.osac.openshift.io/v1alpha1` and exposes a single subresource:
+
+```
+GET /apis/console.osac.openshift.io/v1alpha1/namespaces/{ns}/computeinstances/{name}/console
+```
+
+### Request flow
+
+```
+Client (CLI / UI)
+  |  gRPC bidirectional stream
+  v
+Fulfillment Service  (Console gRPC server, session manager)
+  |  WebSocket (binary)
+  v
+Console Proxy  (aggregated API on the hub cluster)
+  |  WebSocket (binary)
+  v
+KubeVirt  (VirtualMachineInstance console subresource)
+```
+
+On each request the proxy:
+
+1. Looks up the OSAC `ComputeInstance` CR to find the backing KubeVirt VM name
+   and namespace.
+2. Resolves the kubeconfig for the cluster where the VM runs (see modes below).
+3. Dials the upstream KubeVirt console WebSocket at
+   `subresources.kubevirt.io/v1/namespaces/{vmNS}/virtualmachineinstances/{vmName}/console`.
+4. Accepts the client WebSocket upgrade and proxies binary data bidirectionally
+   with `io.Copy`.
+
+### VM cluster modes
+
+The `--vm-cluster-mode` flag (env: `OSAC_CONSOLE_PROXY_VM_CLUSTER_MODE`)
+controls how the proxy obtains the kubeconfig for the cluster that runs KubeVirt
+VMs:
+
+| Mode | Behavior |
+|------|----------|
+| `remote` | Reads a kubeconfig from a Secret labeled `osac.openshift.io/remote-cluster-kubeconfig` in the ComputeInstance's namespace. Use when VMs run on a dedicated cluster. |
+| `local` | Uses the proxy's own in-cluster credentials. Use when VMs run on the same cluster as the proxy. |
+| `auto` (default) | Tries `remote` first; falls back to `local` only when no matching Secret exists. Real config errors (parse failures, missing keys) are not masked. |
+
+### Authentication and authorization
+
+The proxy uses the standard Kubernetes aggregated-API auth delegation model:
+
+- **Authentication** -- request-header authentication. The kube-apiserver
+  front-proxy sets identity headers; the proxy validates them against the CA
+  from the `kube-system/extension-apiserver-authentication` ConfigMap. CA and
+  header configuration are watched dynamically and update without restart.
+- **Authorization** -- each request triggers a `SubjectAccessReview` against the
+  kube-apiserver. Allow decisions are cached for 5 minutes, deny decisions for
+  30 seconds.
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OSAC_CONSOLE_PROXY_PORT` | `8443` | HTTPS API server port |
+| `OSAC_CONSOLE_PROXY_HEALTH_BIND_ADDRESS` | `:8081` | Health probe server address |
+| `OSAC_CONSOLE_PROXY_TLS_CERT_FILE` | — | Path to TLS certificate |
+| `OSAC_CONSOLE_PROXY_TLS_KEY_FILE` | — | Path to TLS private key |
+| `OSAC_CONSOLE_PROXY_VM_CLUSTER_MODE` | `auto` | VM cluster resolution mode (`remote`, `local`, `auto`) |
+
+### Deployment
+
+The console proxy binary is built alongside the operator manager in the same
+container image (`Containerfile`). It is deployed as a separate `Deployment` in
+the `osac` namespace with its own `ServiceAccount`, `Service`, and TLS
+`Certificate` (via cert-manager). An `APIService` resource registers it with the
+kube-apiserver. Deployment manifests live in `config/console-proxy/` and are
+consumed via `osac-installer`.
+
+### Source layout
+
+```
+cmd/console-proxy/main.go          # Entry point, CLI flags
+internal/consoleproxy/
+  server.go                        # HTTPS + health probe servers, routing
+  auth.go                          # Delegated authn/authz
+  console.go                       # WebSocket proxy handler
+  config_resolver.go               # VM cluster kubeconfig resolution
+  discovery.go                     # Kubernetes API discovery endpoints
+  status.go                        # Error-to-Kubernetes-Status mapping
+config/console-proxy/              # Kustomize deployment manifests
+test/e2e/console_proxy_test.go     # E2E tests
+```
+
 ## Getting Started
 
 ### Prerequisites
