@@ -20,7 +20,9 @@ OSAC operator is a Kubernetes operator that reconciles infrastructure resources 
 - **Never edit** `config/crd/`, `zz_generated.deepcopy.go`, or `internal/api/` — all generated
 - **Always `buf generate`** after updating the module version in `buf.gen.yaml`
 - **Commit message format**: `MGMT-XXXXX: description of change`
-- Run `make lint test` before committing
+- **Always `make lint` before committing or creating PRs** — CI runs `golangci-lint` (including `goconst`) and will reject PRs with lint failures
+- Run `make test` before committing
+- **Use constants for repeated string literals** — the `goconst` linter flags strings with 3+ occurrences; define them as `const` or package-level `var`
 
 ## Development Commands
 
@@ -102,6 +104,14 @@ test/e2e/                  # End-to-end tests
 - Pre-commit hooks in `.pre-commit-config.yaml`: whitespace, yamllint, golangci-lint
 - Linter config in `.golangci.yml`
 - Run manually: `pre-commit run --all-files`
+
+## Claude Code Hooks
+
+Hooks are configured in `.claude/settings.json` and run automatically during Claude Code sessions:
+
+- **CRD type changes** (`PostToolUse`): When `*_types.go` is edited, `make manifests generate` runs automatically.
+- **Go module changes** (`PostToolUse`): When `go.mod` is edited, `go mod tidy` runs automatically.
+- **Pre-PR** (`PreToolUse`): `make fmt` (fails if files changed — commit fixes first), `make lint`, and `make test` run before `gh pr create`.
 
 ## Detailed Rules (auto-loaded from `.claude/rules/`)
 
