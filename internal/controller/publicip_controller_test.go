@@ -539,9 +539,9 @@ var _ = Describe("PublicIPReconciler", func() {
 				Build()
 
 			// Apply status separately — WithStatusSubresource strips status from WithObjects.
-			ci.Status.TenantReference = &osacv1alpha1.TenantReferenceType{
-				Name:      "test-tenant",
-				Namespace: testTenantNS,
+			ci.Status.VirtualMachineReference = &osacv1alpha1.VirtualMachineReferenceType{
+				Namespace:                  testTenantNS,
+				KubeVirtVirtualMachineName: "test-vm",
 			}
 			Expect(ciClient.Status().Update(testCtx, ci)).To(Succeed())
 
@@ -633,7 +633,7 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 		})
 
-		It("should requeue when ComputeInstance has no TenantReference", func() {
+		It("should requeue when ComputeInstance has no VirtualMachineReference", func() {
 			ciNoTenant := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "ci-no-tenant",
@@ -671,7 +671,7 @@ var _ = Describe("PublicIPReconciler", func() {
 			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Pass 2: CI found but no TenantReference, requeue
+			// Pass 2: CI found but no VirtualMachineReference, requeue
 			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))

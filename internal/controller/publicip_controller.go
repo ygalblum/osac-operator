@@ -28,7 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
@@ -256,7 +258,7 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 	return r.handleProvisioning(ctx, publicIP)
 }
 
-// syncComputeInstanceTargetNamespaceAnnotation resolves the tenant namespace for the
+// syncComputeInstanceTargetNamespaceAnnotation resolves the VM namespace for the
 // ComputeInstance referenced by spec.computeInstance and writes it as an annotation.
 // When spec.computeInstance is cleared, the annotation is removed.
 func (r *PublicIPReconciler) syncComputeInstanceTargetNamespaceAnnotation(
@@ -273,6 +275,13 @@ func (r *PublicIPReconciler) syncComputeInstanceTargetNamespaceAnnotation(
 		return false, false, nil
 	}
 
+	if r.ComputeInstanceNamespace == "" {
+		return false, false, fmt.Errorf(
+			"ComputeInstanceNamespace is not configured; cannot resolve target namespace for computeInstance %q",
+			publicIP.Spec.ComputeInstance,
+		)
+	}
+
 	ciList := &v1alpha1.ComputeInstanceList{}
 	if err := r.List(ctx, ciList,
 		client.InNamespace(r.ComputeInstanceNamespace),
@@ -286,13 +295,13 @@ func (r *PublicIPReconciler) syncComputeInstanceTargetNamespaceAnnotation(
 	}
 
 	ci := &ciList.Items[0]
-	if ci.Status.TenantReference == nil {
-		log.Info("ComputeInstance has no TenantReference yet, requeueing",
+	if ci.Status.VirtualMachineReference == nil {
+		log.Info("ComputeInstance has no VirtualMachineReference yet, requeueing",
 			"computeInstance", ci.Name, "computeInstanceUUID", publicIP.Spec.ComputeInstance)
 		return false, true, nil
 	}
 
-	targetNamespace := ci.Status.TenantReference.Namespace
+	targetNamespace := ci.Status.VirtualMachineReference.Namespace
 	if publicIP.Annotations == nil {
 		publicIP.Annotations = make(map[string]string)
 	}
@@ -443,12 +452,58 @@ func (r *PublicIPReconciler) handleDeprovisioning(ctx context.Context, publicIP 
 }
 
 // SetupWithManager registers this controller with the multicluster manager.
-// It watches PublicIP CRs in the networking namespace on the local cluster only.
+// It watches PublicIP CRs in the networking namespace on the local cluster only,
+// and also watches ComputeInstance resources so that PublicIPs reconcile immediately
+// when a referenced CI's status changes (e.g., VirtualMachineReference is set).
 func (r *PublicIPReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&v1alpha1.PublicIP{},
 			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false)).
+		Watches(
+			&v1alpha1.ComputeInstance{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapComputeInstanceToPublicIPs),
+			mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
 		Complete(r)
+}
+
+// mapComputeInstanceToPublicIPs maps a ComputeInstance change to all PublicIPs
+// that reference it via spec.computeInstance, so the PublicIP reconciler can
+// update the target namespace annotation when the CI's VM reference appears.
+func (r *PublicIPReconciler) mapComputeInstanceToPublicIPs(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := ctrllog.FromContext(ctx)
+
+	ciUUID, exists := obj.GetLabels()[osacComputeInstanceIDLabel]
+	if !exists {
+		return nil
+	}
+
+	publicIPs := &v1alpha1.PublicIPList{}
+	if err := r.List(ctx, publicIPs, client.InNamespace(r.NetworkingNamespace)); err != nil {
+		log.Error(err, "failed to list PublicIPs for ComputeInstance watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range publicIPs.Items {
+		if publicIPs.Items[i].Spec.ComputeInstance == ciUUID {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(&publicIPs.Items[i]),
+			})
+		}
+	}
+
+	if len(requests) > 0 {
+		log.Info("mapped ComputeInstance change to PublicIPs",
+			"computeInstance", obj.GetName(),
+			"computeInstanceUUID", ciUUID,
+			"publicIPCount", len(requests),
+		)
+	}
+
+	return requests
 }
