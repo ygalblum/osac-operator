@@ -66,8 +66,8 @@ var _ = Describe("SubnetReconciler", func() {
 			Spec: osacv1alpha1.VirtualNetworkSpec{
 				Region:                 "us-west-1",
 				IPv4CIDR:               "10.0.0.0/16",
-				NetworkClass:           "cudn-net",
-				ImplementationStrategy: "cudn-net",
+				NetworkClass:           "cudn_net",
+				ImplementationStrategy: "cudn_net",
 			},
 		}
 		Expect(k8sClient.Create(ctx, vnet)).To(Succeed())

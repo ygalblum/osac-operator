@@ -72,8 +72,8 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			},
 			Spec: osacv1alpha1.VirtualNetworkSpec{
 				Region:                 "us-west-1",
-				NetworkClass:           "cudn-net",
-				ImplementationStrategy: "cudn-net",
+				NetworkClass:           "cudn_net",
+				ImplementationStrategy: "cudn_net",
 			},
 		}
 
@@ -263,7 +263,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 
 			// Verify annotation was set to match parent VirtualNetwork's ImplementationStrategy
 			Expect(updated.Annotations).NotTo(BeNil())
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn_net"))
 		})
 
 		It("should not update when annotation already matches implementation strategy", func() {
@@ -273,7 +273,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 					Name:      "sg-with-annotation",
 					Namespace: "test-namespace",
 					Annotations: map[string]string{
-						osacImplementationStrategyAnnotation: "cudn-net",
+						osacImplementationStrategyAnnotation: "cudn_net",
 					},
 				},
 				Spec: osacv1alpha1.SecurityGroupSpec{
@@ -303,7 +303,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
 
 			// Verify annotation still matches (no duplicate Update calls)
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn_net"))
 		})
 
 		It("should update annotation when it differs from parent VirtualNetwork", func() {
@@ -343,7 +343,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
 
 			// Verify annotation was updated to match parent VirtualNetwork
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn_net"))
 		})
 
 		It("should requeue if parent VirtualNetwork has no ImplementationStrategy", func() {

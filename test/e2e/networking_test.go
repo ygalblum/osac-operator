@@ -61,7 +61,7 @@ var _ = Describe("Networking Resources", Ordered, func() {
 			By("creating a VirtualNetwork")
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = createVirtualNetworkYAML(
-				virtualNetworkName, testNamespace, "cudn-net", "us-west-1", "10.0.0.0/16", "cudn-net")
+				virtualNetworkName, testNamespace, "cudn_net", "us-west-1", "10.0.0.0/16", "cudn_net")
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -101,14 +101,14 @@ var _ = Describe("Networking Resources", Ordered, func() {
 				"-n", testNamespace, "-o", "jsonpath={.spec.networkClass}")
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(string(output)).To(Equal("cudn-net"))
+			Expect(string(output)).To(Equal("cudn_net"))
 
 			By("verifying implementationStrategy")
 			cmd = exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
 				"-n", testNamespace, "-o", "jsonpath={.spec.implementationStrategy}")
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(string(output)).To(Equal("cudn-net"))
+			Expect(string(output)).To(Equal("cudn_net"))
 		})
 
 		It("should be listable with shortname", func() {

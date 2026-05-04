@@ -9,5 +9,5 @@ metadata:
 spec:
   implementationStrategy: cudn_net
   region: us-west-1
-  networkClass: cudn-net
+  networkClass: cudn_net
   ipv4Cidr: "10.0.0.0/16"

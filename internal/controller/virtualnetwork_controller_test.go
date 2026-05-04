@@ -62,8 +62,8 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Spec: osacv1alpha1.VirtualNetworkSpec{
 				Region:                 "us-west-1",
 				IPv4CIDR:               "10.0.0.0/16",
-				NetworkClass:           "cudn-net",
-				ImplementationStrategy: "cudn-net",
+				NetworkClass:           "cudn_net",
+				ImplementationStrategy: "cudn_net",
 			},
 		}
 	})
@@ -151,7 +151,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			// Verify annotation was set
 			updatedVnet := &osacv1alpha1.VirtualNetwork{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updatedVnet)).To(Succeed())
-			Expect(updatedVnet.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
+			Expect(updatedVnet.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn_net"))
 
 			// Second reconcile: should now trigger the provision job
 			result, err = reconciler.Reconcile(ctx, req)
