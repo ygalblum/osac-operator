@@ -1382,4 +1382,513 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(allocatedIP.Status.Address).To(Equal("203.0.113.42"), "address should be populated in Allocated state")
 		})
 	})
+
+	// -----------------------------------------------------------------------
+	// Auto-detach on ComputeInstance deletion
+	//
+	// These tests verify the behavior introduced in Phase 3 Plan 01:
+	//   - handleAutoDetach: detects CI deletion and acts based on PublicIP state
+	//   - maybeRemoveCIFinalizer: removes CI finalizer when all PublicIPs detached
+	//   - syncComputeInstanceTargetNamespaceAnnotation: CI not found edge cases
+	//
+	// Each test creates a fresh fakeClient and reconciler to avoid shared state.
+	// The Recorder field is left nil (production code has nil-check guards).
+	// -----------------------------------------------------------------------
+	Context("auto-detach on ComputeInstance deletion", func() {
+
+		// createDeletingCI creates a ComputeInstance with DeletionTimestamp set,
+		// simulating a CI that is being deleted. The CI must have at least one
+		// finalizer for DeletionTimestamp to be valid in Kubernetes.
+		createDeletingCI := func(uuid string, finalizers ...string) *osacv1alpha1.ComputeInstance {
+			if len(finalizers) == 0 {
+				finalizers = []string{"some-other-controller-finalizer"}
+			}
+			ci := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "deleting-ci",
+					Namespace:  testNamespace,
+					Labels:     map[string]string{osacComputeInstanceIDLabel: uuid},
+					Finalizers: finalizers,
+				},
+				Status: osacv1alpha1.ComputeInstanceStatus{
+					VirtualMachineReference: &osacv1alpha1.VirtualMachineReferenceType{
+						Namespace:                  testNamespace,
+						KubeVirtVirtualMachineName: "test-vm",
+					},
+				},
+			}
+			now := metav1.Now()
+			ci.DeletionTimestamp = &now
+			return ci
+		}
+
+		It("should auto-detach from Attached state and retain status.address (D-03/D-06, DTCH-04)", func() {
+			deletingCI := createDeletingCI(testComputeInstance)
+
+			pip := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pip-attached",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: testComputeInstance,
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(pip, parentPool, deletingCI).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}, &osacv1alpha1.ComputeInstance{}).
+				Build()
+
+			// Persist CI status (WithStatusSubresource strips it from WithObjects)
+			Expect(fc.Status().Update(testCtx, deletingCI)).To(Succeed())
+
+			pip.Status.Phase = osacv1alpha1.PublicIPPhaseReady
+			pip.Status.State = osacv1alpha1.PublicIPStateAttached
+			pip.Status.Address = "10.0.0.1"
+			Expect(fc.Status().Update(testCtx, pip)).To(Succeed())
+
+			emptyTarget := fake.NewClientBuilder().WithScheme(testScheme).Build()
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				mgr:                      &mockMulticlusterManager{targetClient: emptyTarget},
+				NetworkingNamespace:      testNamespace,
+				ComputeInstanceNamespace: testNamespace,
+				ProvisioningProvider:     mockProvider,
+				StatusPollInterval:       1 * time.Second,
+				MaxJobHistory:            10,
+			}
+
+			// Re-set DeletionTimestamp in memory (fake client stores without it)
+			now := metav1.Now()
+			deletingCI.DeletionTimestamp = &now
+
+			result, err := rec.handleAutoDetach(testCtx, pip, deletingCI)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(result.specChanged).To(BeTrue(), "spec should be changed (computeInstance cleared)")
+			Expect(pip.Spec.ComputeInstance).To(Equal(""), "spec.computeInstance should be cleared")
+			Expect(pip.Status.Address).To(Equal("10.0.0.1"), "status.address should be retained (DTCH-04)")
+
+			// Verify CI now has the detach finalizer
+			updatedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(deletingCI), updatedCI)).To(Succeed())
+			Expect(updatedCI.Finalizers).To(ContainElement(osacPublicIPDetachFinalizer))
+		})
+
+		It("should requeue auto-detach when CI deleted during Attaching state (D-09)", func() {
+			deletingCI := createDeletingCI(testComputeInstance)
+
+			pip := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pip-attaching",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: testComputeInstance,
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(pip, parentPool, deletingCI).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}, &osacv1alpha1.ComputeInstance{}).
+				Build()
+
+			Expect(fc.Status().Update(testCtx, deletingCI)).To(Succeed())
+
+			pip.Status.Phase = osacv1alpha1.PublicIPPhaseProgressing
+			pip.Status.State = osacv1alpha1.PublicIPStateAttaching
+			Expect(fc.Status().Update(testCtx, pip)).To(Succeed())
+
+			emptyTarget := fake.NewClientBuilder().WithScheme(testScheme).Build()
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				mgr:                      &mockMulticlusterManager{targetClient: emptyTarget},
+				NetworkingNamespace:      testNamespace,
+				ComputeInstanceNamespace: testNamespace,
+				ProvisioningProvider:     mockProvider,
+				StatusPollInterval:       1 * time.Second,
+				MaxJobHistory:            10,
+			}
+
+			now := metav1.Now()
+			deletingCI.DeletionTimestamp = &now
+
+			result, err := rec.handleAutoDetach(testCtx, pip, deletingCI)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(result.requeue).To(BeTrue(), "should requeue for in-flight attach")
+			Expect(result.specChanged).To(BeFalse(), "spec should not change during in-flight attach")
+			Expect(pip.Spec.ComputeInstance).To(Equal(testComputeInstance), "spec.computeInstance should be unchanged")
+
+			// CI should still get the detach finalizer (even though no detach yet)
+			updatedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(deletingCI), updatedCI)).To(Succeed())
+			Expect(updatedCI.Finalizers).To(ContainElement(osacPublicIPDetachFinalizer))
+		})
+
+		It("should no-op auto-detach when CI deleted during Releasing state (D-10)", func() {
+			deletingCI := createDeletingCI(testComputeInstance)
+
+			pip := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pip-releasing",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: "",
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(pip, parentPool, deletingCI).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}, &osacv1alpha1.ComputeInstance{}).
+				Build()
+
+			Expect(fc.Status().Update(testCtx, deletingCI)).To(Succeed())
+
+			pip.Status.Phase = osacv1alpha1.PublicIPPhaseProgressing
+			pip.Status.State = osacv1alpha1.PublicIPStateReleasing
+			Expect(fc.Status().Update(testCtx, pip)).To(Succeed())
+
+			emptyTarget := fake.NewClientBuilder().WithScheme(testScheme).Build()
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				mgr:                      &mockMulticlusterManager{targetClient: emptyTarget},
+				NetworkingNamespace:      testNamespace,
+				ComputeInstanceNamespace: testNamespace,
+				ProvisioningProvider:     mockProvider,
+				StatusPollInterval:       1 * time.Second,
+				MaxJobHistory:            10,
+			}
+
+			now := metav1.Now()
+			deletingCI.DeletionTimestamp = &now
+
+			result, err := rec.handleAutoDetach(testCtx, pip, deletingCI)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(result.requeue).To(BeFalse(), "should not requeue (detach already in progress)")
+			Expect(result.specChanged).To(BeFalse(), "spec should not change")
+		})
+
+		It("should auto-detach by clearing spec on Failed state when CI deleted (D-11)", func() {
+			deletingCI := createDeletingCI(testComputeInstance)
+
+			pip := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pip-failed",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: testComputeInstance,
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(pip, parentPool, deletingCI).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}, &osacv1alpha1.ComputeInstance{}).
+				Build()
+
+			Expect(fc.Status().Update(testCtx, deletingCI)).To(Succeed())
+
+			pip.Status.Phase = osacv1alpha1.PublicIPPhaseFailed
+			pip.Status.State = osacv1alpha1.PublicIPStateFailed
+			Expect(fc.Status().Update(testCtx, pip)).To(Succeed())
+
+			emptyTarget := fake.NewClientBuilder().WithScheme(testScheme).Build()
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				mgr:                      &mockMulticlusterManager{targetClient: emptyTarget},
+				NetworkingNamespace:      testNamespace,
+				ComputeInstanceNamespace: testNamespace,
+				ProvisioningProvider:     mockProvider,
+				StatusPollInterval:       1 * time.Second,
+				MaxJobHistory:            10,
+			}
+
+			now := metav1.Now()
+			deletingCI.DeletionTimestamp = &now
+
+			result, err := rec.handleAutoDetach(testCtx, pip, deletingCI)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(result.specChanged).To(BeTrue(), "spec should be changed (stale ref cleared)")
+			Expect(pip.Spec.ComputeInstance).To(Equal(""), "spec.computeInstance should be cleared")
+			Expect(pip.Status.State).To(Equal(osacv1alpha1.PublicIPStateFailed), "state should remain Failed")
+		})
+
+		It("should keep CI auto-detach finalizer when multiple PublicIPs still reference CI (D-05, multi-attach)", func() {
+			deletingCI := createDeletingCI(testComputeInstance)
+
+			pip1 := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pip-multi-1",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: testComputeInstance,
+				},
+			}
+			pip2 := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pip-multi-2",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: testComputeInstance,
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(pip1, pip2, parentPool, deletingCI).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}, &osacv1alpha1.ComputeInstance{}).
+				Build()
+
+			Expect(fc.Status().Update(testCtx, deletingCI)).To(Succeed())
+
+			pip1.Status.Phase = osacv1alpha1.PublicIPPhaseReady
+			pip1.Status.State = osacv1alpha1.PublicIPStateAttached
+			Expect(fc.Status().Update(testCtx, pip1)).To(Succeed())
+
+			pip2.Status.Phase = osacv1alpha1.PublicIPPhaseReady
+			pip2.Status.State = osacv1alpha1.PublicIPStateAttached
+			Expect(fc.Status().Update(testCtx, pip2)).To(Succeed())
+
+			emptyTarget := fake.NewClientBuilder().WithScheme(testScheme).Build()
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				mgr:                      &mockMulticlusterManager{targetClient: emptyTarget},
+				NetworkingNamespace:      testNamespace,
+				ComputeInstanceNamespace: testNamespace,
+				ProvisioningProvider:     mockProvider,
+				StatusPollInterval:       1 * time.Second,
+				MaxJobHistory:            10,
+			}
+
+			now := metav1.Now()
+			deletingCI.DeletionTimestamp = &now
+
+			// Auto-detach first PublicIP
+			result, err := rec.handleAutoDetach(testCtx, pip1, deletingCI)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.specChanged).To(BeTrue())
+			Expect(pip1.Spec.ComputeInstance).To(Equal(""))
+
+			// Persist the cleared spec for pip1 so maybeRemoveCIFinalizer sees it
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(pip1), pip1)).To(Succeed())
+			pip1.Spec.ComputeInstance = ""
+			Expect(fc.Update(testCtx, pip1)).To(Succeed())
+
+			// pip2 still references the CI, so finalizer should remain
+			err = rec.maybeRemoveCIFinalizer(testCtx, testComputeInstance)
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(deletingCI), updatedCI)).To(Succeed())
+			Expect(updatedCI.Finalizers).To(ContainElement(osacPublicIPDetachFinalizer),
+				"finalizer should remain because pip2 still references CI")
+
+			// Now clear pip2's spec (simulate second auto-detach completing)
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(pip2), pip2)).To(Succeed())
+			pip2.Spec.ComputeInstance = ""
+			Expect(fc.Update(testCtx, pip2)).To(Succeed())
+
+			// Now finalizer should be removed (no more references)
+			err = rec.maybeRemoveCIFinalizer(testCtx, testComputeInstance)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(deletingCI), updatedCI)).To(Succeed())
+			Expect(updatedCI.Finalizers).NotTo(ContainElement(osacPublicIPDetachFinalizer),
+				"finalizer should be removed after all PublicIPs detached")
+		})
+
+		It("should remove CI finalizer after single PublicIP detaches", func() {
+			// CI already has the detach finalizer (simulates state after handleAutoDetach ran)
+			ci := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ci-with-finalizer",
+					Namespace: testNamespace,
+					Labels:    map[string]string{osacComputeInstanceIDLabel: testComputeInstance},
+					Finalizers: []string{
+						"some-other-controller-finalizer",
+						osacPublicIPDetachFinalizer,
+					},
+				},
+				Status: osacv1alpha1.ComputeInstanceStatus{
+					VirtualMachineReference: &osacv1alpha1.VirtualMachineReferenceType{
+						Namespace:                  testNamespace,
+						KubeVirtVirtualMachineName: "test-vm",
+					},
+				},
+			}
+
+			// PublicIP has already detached (spec.computeInstance is empty, state is Allocated)
+			pip := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pip-already-detached",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: "",
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(pip, parentPool, ci).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}, &osacv1alpha1.ComputeInstance{}).
+				Build()
+
+			Expect(fc.Status().Update(testCtx, ci)).To(Succeed())
+
+			pip.Status.Phase = osacv1alpha1.PublicIPPhaseReady
+			pip.Status.State = osacv1alpha1.PublicIPStateAllocated
+			Expect(fc.Status().Update(testCtx, pip)).To(Succeed())
+
+			emptyTarget := fake.NewClientBuilder().WithScheme(testScheme).Build()
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				mgr:                      &mockMulticlusterManager{targetClient: emptyTarget},
+				NetworkingNamespace:      testNamespace,
+				ComputeInstanceNamespace: testNamespace,
+				ProvisioningProvider:     mockProvider,
+				StatusPollInterval:       1 * time.Second,
+				MaxJobHistory:            10,
+			}
+
+			err := rec.maybeRemoveCIFinalizer(testCtx, testComputeInstance)
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedCI := &osacv1alpha1.ComputeInstance{}
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(ci), updatedCI)).To(Succeed())
+			Expect(updatedCI.Finalizers).NotTo(ContainElement(osacPublicIPDetachFinalizer),
+				"detach finalizer should be removed after all PublicIPs detached")
+			Expect(updatedCI.Finalizers).To(ContainElement("some-other-controller-finalizer"),
+				"other finalizers should be preserved")
+		})
+
+		It("should clear spec when CI not found and PublicIP is Attached (Pitfall 3 edge case)", func() {
+			// PublicIP has a stale reference to a CI that no longer exists.
+			// syncComputeInstanceTargetNamespaceAnnotation should clear the reference.
+			pip := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "pip-stale-ref",
+					Namespace:  testNamespace,
+					Finalizers: []string{osacPublicIPFinalizer},
+					Annotations: map[string]string{
+						osacPublicIPTargetNamespaceAnnotation: "old-tenant-ns",
+					},
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: "missing-ci-uuid",
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(pip, parentPool).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}).
+				Build()
+
+			pip.Status.Phase = osacv1alpha1.PublicIPPhaseReady
+			pip.Status.State = osacv1alpha1.PublicIPStateAttached
+			pip.Status.Address = "10.0.0.99"
+			Expect(fc.Status().Update(testCtx, pip)).To(Succeed())
+
+			emptyTarget := fake.NewClientBuilder().WithScheme(testScheme).Build()
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				mgr:                      &mockMulticlusterManager{targetClient: emptyTarget},
+				NetworkingNamespace:      testNamespace,
+				ComputeInstanceNamespace: testNamespace,
+				ProvisioningProvider:     mockProvider,
+				StatusPollInterval:       1 * time.Second,
+				MaxJobHistory:            10,
+			}
+
+			// Re-read to get current resourceVersion
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(pip), pip)).To(Succeed())
+
+			changed, requeue, err := rec.syncComputeInstanceTargetNamespaceAnnotation(testCtx, pip)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(changed).To(BeTrue(), "should return changed=true (stale ref cleared)")
+			Expect(requeue).To(BeFalse(), "should not requeue")
+			Expect(pip.Spec.ComputeInstance).To(Equal(""), "spec.computeInstance should be cleared for missing CI")
+		})
+
+		It("should requeue when CI not found and PublicIP is Pending (existing behavior)", func() {
+			// A Pending PublicIP with a CI reference should requeue, not clear the ref.
+			// The CI may just not have been created yet.
+			pip := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "pip-pending-missing-ci",
+					Namespace:  testNamespace,
+					Finalizers: []string{osacPublicIPFinalizer},
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool:            testPoolUUID,
+					ComputeInstance: "missing-ci-uuid",
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(pip, parentPool).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}).
+				Build()
+
+			pip.Status.Phase = osacv1alpha1.PublicIPPhaseProgressing
+			pip.Status.State = osacv1alpha1.PublicIPStatePending
+			Expect(fc.Status().Update(testCtx, pip)).To(Succeed())
+
+			emptyTarget := fake.NewClientBuilder().WithScheme(testScheme).Build()
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				mgr:                      &mockMulticlusterManager{targetClient: emptyTarget},
+				NetworkingNamespace:      testNamespace,
+				ComputeInstanceNamespace: testNamespace,
+				ProvisioningProvider:     mockProvider,
+				StatusPollInterval:       1 * time.Second,
+				MaxJobHistory:            10,
+			}
+
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(pip), pip)).To(Succeed())
+
+			changed, requeue, err := rec.syncComputeInstanceTargetNamespaceAnnotation(testCtx, pip)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(requeue).To(BeTrue(), "should requeue for Pending PublicIP with missing CI")
+			Expect(changed).To(BeFalse(), "spec should not change")
+			Expect(pip.Spec.ComputeInstance).To(Equal("missing-ci-uuid"), "spec.computeInstance should be unchanged")
+		})
+	})
 })
