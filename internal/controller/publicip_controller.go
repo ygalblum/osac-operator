@@ -167,6 +167,7 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 
 	if publicIP.Status.Phase == "" {
 		publicIP.Status.Phase = v1alpha1.PublicIPPhaseProgressing
+		publicIP.Status.State = v1alpha1.PublicIPStatePending
 	}
 
 	// Resolve the parent PublicIPPool by the fulfillment-service UUID stored in spec.pool.
@@ -248,11 +249,21 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 		LastTransitionTime: metav1.Now(),
 	})
 
-	// Transition to Progressing on first provision or when spec changed after a previous
-	// success. Don't override Failed during backoff (the provisioning lifecycle handles retry).
-	if publicIP.Status.Phase == "" || (publicIP.Status.Phase == v1alpha1.PublicIPPhaseReady &&
-		!provisioning.IsConfigApplied(&publicIP.Status.Jobs, publicIP.Status.DesiredConfigVersion)) {
+	// Detect attach/detach transitions and set transitional state before provisioning
+	if publicIP.Status.State == v1alpha1.PublicIPStateAllocated && publicIP.Spec.ComputeInstance != "" {
 		publicIP.Status.Phase = v1alpha1.PublicIPPhaseProgressing
+		publicIP.Status.State = v1alpha1.PublicIPStateAttaching
+	} else if publicIP.Status.State == v1alpha1.PublicIPStateAttached && publicIP.Spec.ComputeInstance == "" {
+		publicIP.Status.Phase = v1alpha1.PublicIPPhaseProgressing
+		publicIP.Status.State = v1alpha1.PublicIPStateReleasing
+	} else if publicIP.Status.Phase == "" || (publicIP.Status.Phase == v1alpha1.PublicIPPhaseReady &&
+		!provisioning.IsConfigApplied(&publicIP.Status.Jobs, publicIP.Status.DesiredConfigVersion)) {
+		// Transition to Progressing on first provision or when spec changed after a previous
+		// success. Don't override Failed during backoff (the provisioning lifecycle handles retry).
+		publicIP.Status.Phase = v1alpha1.PublicIPPhaseProgressing
+		if publicIP.Status.State == "" {
+			publicIP.Status.State = v1alpha1.PublicIPStatePending
+		}
 	}
 
 	return r.handleProvisioning(ctx, publicIP)
@@ -353,8 +364,18 @@ func (r *PublicIPReconciler) handleProvisioning(ctx context.Context, publicIP *v
 		&provisioning.State{Jobs: &publicIP.Status.Jobs, DesiredConfigVersion: publicIP.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed:  func(_ string) { publicIP.Status.Phase = v1alpha1.PublicIPPhaseFailed },
-			OnSuccess: func(_ provisioning.ProvisionStatus) { publicIP.Status.Phase = v1alpha1.PublicIPPhaseReady },
+			OnFailed: func(_ string) {
+				publicIP.Status.Phase = v1alpha1.PublicIPPhaseFailed
+				publicIP.Status.State = v1alpha1.PublicIPStateFailed
+			},
+			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				publicIP.Status.Phase = v1alpha1.PublicIPPhaseReady
+				if publicIP.Spec.ComputeInstance != "" {
+					publicIP.Status.State = v1alpha1.PublicIPStateAttached
+				} else {
+					publicIP.Status.State = v1alpha1.PublicIPStateAllocated
+				}
+			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(

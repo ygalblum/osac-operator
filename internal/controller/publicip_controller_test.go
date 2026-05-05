@@ -67,8 +67,10 @@ var _ = Describe("PublicIPReconciler", func() {
 	)
 
 	const (
-		testNamespace = "test-namespace"
-		testPoolUUID  = "pool-uuid-123"
+		testNamespace          = "test-namespace"
+		testPoolUUID           = "pool-uuid-123"
+		testConfigVersion      = "version-1-abc123"
+		testConfigVersionUpdated = "version-2-def456"
 	)
 
 	BeforeEach(func() {
@@ -473,6 +475,311 @@ var _ = Describe("PublicIPReconciler", func() {
 
 			Expect(deprovisionCalled).To(BeTrue())
 			Expect(fetched.Finalizers).NotTo(ContainElement(osacPublicIPFinalizer))
+		})
+
+		It("should set state to Pending on initial provisioning", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateRunning,
+					Message: "Job running",
+				}, nil
+			}
+
+			// Pass 1: finalizer, Pass 2: trigger provisioning -> Progressing + Pending
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseProgressing))
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStatePending))
+		})
+
+		It("should set state to Allocated on successful initial provision with no ComputeInstance", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			mockProvider.triggerProvisionFunc = func(
+				ctx context.Context, resource client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "job-allocated",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Job triggered",
+				}, nil
+			}
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateSucceeded,
+					Message: "Provisioning completed",
+				}, nil
+			}
+
+			// Pass 1: finalizer, Pass 2: trigger, Pass 3: poll -> Ready + Allocated
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseReady))
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateAllocated))
+		})
+
+		It("should set state to Attaching when ComputeInstance is set on allocated IP", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			// Start with an Allocated PublicIP (Ready phase, Allocated state)
+			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseReady
+			publicIP.Status.State = osacv1alpha1.PublicIPStateAllocated
+			publicIP.Status.DesiredConfigVersion = testConfigVersion
+			publicIP.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "initial-provision",
+					Type:          osacv1alpha1.JobTypeProvision,
+					State:         osacv1alpha1.JobStateSucceeded,
+					ConfigVersion: testConfigVersion,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+				},
+			}
+			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
+
+			// Update spec to set ComputeInstance, which changes config version
+			publicIP.Spec.ComputeInstance = "some-ci"
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateRunning,
+					Message: "Job running",
+				}, nil
+			}
+
+			// Reconcile should detect attach transition -> Progressing + Attaching
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseProgressing))
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateAttaching))
+		})
+
+		It("should set state to Attached when attach provisioning succeeds", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			// Start in Attaching state
+			publicIP.Spec.ComputeInstance = "some-ci"
+			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseProgressing
+			publicIP.Status.State = osacv1alpha1.PublicIPStateAttaching
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
+
+			mockProvider.triggerProvisionFunc = func(
+				ctx context.Context, resource client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "attach-job",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Attach job triggered",
+				}, nil
+			}
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateSucceeded,
+					Message: "Attach completed",
+				}, nil
+			}
+
+			// Trigger attach job, then poll -> Ready + Attached
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseReady))
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateAttached))
+		})
+
+		It("should set state to Releasing when ComputeInstance is cleared on attached IP", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			// Start with an Attached PublicIP
+			publicIP.Spec.ComputeInstance = "some-ci"
+			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseReady
+			publicIP.Status.State = osacv1alpha1.PublicIPStateAttached
+			publicIP.Status.DesiredConfigVersion = testConfigVersionUpdated
+			publicIP.Status.Jobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:         "attach-job",
+					Type:          osacv1alpha1.JobTypeProvision,
+					State:         osacv1alpha1.JobStateSucceeded,
+					ConfigVersion: testConfigVersionUpdated,
+					Timestamp:     metav1.NewTime(time.Now().UTC()),
+				},
+			}
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
+
+			// Clear ComputeInstance
+			publicIP.Spec.ComputeInstance = ""
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateRunning,
+					Message: "Job running",
+				}, nil
+			}
+
+			// Reconcile should detect detach transition -> Progressing + Releasing
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseProgressing))
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateReleasing))
+		})
+
+		It("should set state to Allocated when detach provisioning succeeds", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			// Start in Releasing state
+			publicIP.Spec.ComputeInstance = ""
+			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseProgressing
+			publicIP.Status.State = osacv1alpha1.PublicIPStateReleasing
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
+
+			mockProvider.triggerProvisionFunc = func(
+				ctx context.Context, resource client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "detach-job",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Detach job triggered",
+				}, nil
+			}
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateSucceeded,
+					Message: "Detach completed",
+				}, nil
+			}
+
+			// Trigger detach job, then poll -> Ready + Allocated
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseReady))
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateAllocated))
+		})
+
+		It("should set state to Failed on provisioning failure", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			mockProvider.triggerProvisionFunc = func(
+				ctx context.Context, resource client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "job-fail",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Job triggered",
+				}, nil
+			}
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:        jobID,
+					State:        osacv1alpha1.JobStateFailed,
+					Message:      "Provisioning failed",
+					ErrorDetails: "MetalLB unreachable",
+				}, nil
+			}
+
+			// Pass 1: finalizer, Pass 2: trigger, Pass 3: poll -> Failed state + phase
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseFailed))
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateFailed))
+		})
+
+		It("should not change state on deletion", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			// Start with Allocated state
+			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseReady
+			publicIP.Status.State = osacv1alpha1.PublicIPStateAllocated
+			publicIP.Finalizers = []string{osacPublicIPFinalizer}
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
+
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object,
+			) (*provisioning.DeprovisionResult, error) {
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionSkipped,
+				}, nil
+			}
+
+			toDelete := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			_, err := reconciler.handleDelete(testCtx, toDelete)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Phase transitions to Deleting but State remains unchanged
+			Expect(toDelete.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseDeleting))
+			Expect(toDelete.Status.State).To(Equal(osacv1alpha1.PublicIPStateAllocated))
 		})
 
 		It("should ignore PublicIP with management-state unmanaged annotation", func() {
