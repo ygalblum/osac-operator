@@ -339,7 +339,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				_ = k8sClient.Delete(ctx, vmi)
 			})
 
-			targetClient, err := reconciler.getTargetClient(ctx)
+			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
 			Expect(err).NotTo(HaveOccurred())
 
 			ip := reconciler.getFirstVMIIPAddress(ctx, targetClient, vmi.Namespace, vmi.Name)
@@ -1151,7 +1151,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			ctx = context.Background()
 			reconciler = NewComputeInstanceReconciler(testMcManager, "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
 			var err error
-			targetClient, err = reconciler.getTargetClient(ctx)
+			targetClient, err = getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
 			Expect(err).NotTo(HaveOccurred())
 			instance = &osacv1alpha1.ComputeInstance{}
 		})

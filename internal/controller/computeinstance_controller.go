@@ -184,15 +184,6 @@ func ComputeInstanceNamespacePredicate(namespace string) predicate.Predicate {
 	)
 }
 
-// getTargetClient returns the client for the target cluster where VirtualMachine/VMI are managed.
-func (r *ComputeInstanceReconciler) getTargetClient(ctx context.Context) (client.Client, error) {
-	targetCluster, err := r.mgr.GetCluster(ctx, r.targetCluster)
-	if err != nil {
-		return nil, err
-	}
-	return targetCluster.GetClient(), nil
-}
-
 // tenantAnnotationIndexField is the field path used for cache index and List MatchingFields.
 var tenantAnnotationIndexField = fmt.Sprintf("metadata.annotations.%s", osacTenantAnnotation)
 
@@ -650,7 +641,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
-	targetClient, err := r.getTargetClient(ctx)
+	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

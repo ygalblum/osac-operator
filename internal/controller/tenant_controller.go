@@ -122,7 +122,7 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 	instance.Status.StorageClasses = nil
 
 	// Get target cluster client where namespace, StorageClass, and UDN are reconciled
-	targetClient, err := r.getTargetClient(ctx)
+	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -467,12 +467,4 @@ func tenantLabelSelector(project string) metav1.LabelSelector {
 			},
 		},
 	}
-}
-
-func (r *TenantReconciler) getTargetClient(ctx context.Context) (client.Client, error) {
-	targetCluster, err := r.mgr.GetCluster(ctx, r.targetCluster)
-	if err != nil {
-		return nil, err
-	}
-	return targetCluster.GetClient(), nil
 }

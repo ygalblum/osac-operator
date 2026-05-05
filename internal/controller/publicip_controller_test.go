@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -29,12 +30,36 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	runtimecluster "sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/internal/provisioning"
 )
+
+// mockMulticlusterManager is a minimal implementation for testing address population.
+// Embeds the full Manager interface; only GetCluster is overridden.
+type mockMulticlusterManager struct {
+	mcmanager.Manager
+	targetClient client.Client
+}
+
+func (m *mockMulticlusterManager) GetCluster(_ context.Context, _ mc.ClusterName) (runtimecluster.Cluster, error) {
+	return &mockCluster{client: m.targetClient}, nil
+}
+
+// mockCluster satisfies cluster.Cluster; only GetClient is overridden.
+type mockCluster struct {
+	runtimecluster.Cluster
+	client client.Client
+}
+
+func (c *mockCluster) GetClient() client.Client {
+	return c.client
+}
 
 // Tests for the PublicIP provisioning controller.
 //
@@ -67,10 +92,11 @@ var _ = Describe("PublicIPReconciler", func() {
 	)
 
 	const (
-		testNamespace          = "test-namespace"
-		testPoolUUID           = "pool-uuid-123"
-		testConfigVersion      = "version-1-abc123"
+		testNamespace            = "test-namespace"
+		testPoolUUID             = "pool-uuid-123"
+		testConfigVersion        = "version-1-abc123"
 		testConfigVersionUpdated = "version-2-def456"
+		testComputeInstance      = "some-ci"
 	)
 
 	BeforeEach(func() {
@@ -107,22 +133,49 @@ var _ = Describe("PublicIPReconciler", func() {
 			},
 		}
 
+		// ComputeInstance referenced by attach/detach tests via testComputeInstance UUID.
+		testCI := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-ci-k8s",
+				Namespace: testNamespace,
+				Labels: map[string]string{
+					osacComputeInstanceIDLabel: testComputeInstance,
+				},
+			},
+			Status: osacv1alpha1.ComputeInstanceStatus{
+				VirtualMachineReference: &osacv1alpha1.VirtualMachineReferenceType{
+					Namespace:                  testNamespace,
+					KubeVirtVirtualMachineName: "test-vm",
+				},
+			},
+		}
+
 		fakeClient = fake.NewClientBuilder().
 			WithScheme(testScheme).
-			WithObjects(publicIP, parentPool).
-			WithStatusSubresource(&osacv1alpha1.PublicIP{}).
+			WithObjects(publicIP, parentPool, testCI).
+			WithStatusSubresource(&osacv1alpha1.PublicIP{}, &osacv1alpha1.ComputeInstance{}).
 			Build()
+
+		// WithStatusSubresource strips status from WithObjects, so persist it separately.
+		Expect(fakeClient.Status().Update(testCtx, testCI)).To(Succeed())
 
 		mockProvider = &mockProvisioningProvider{name: "mock-aap"}
 
+		// Default mock mgr provides an empty workload-cluster client so the
+		// address-population guard in handleUpdate does not nil-panic. Tests
+		// that need a Service on the workload cluster override reconciler.mgr.
+		emptyTargetClient := fake.NewClientBuilder().WithScheme(testScheme).Build()
+
 		reconciler = &PublicIPReconciler{
-			Client:               fakeClient,
-			APIReader:            fakeClient,
-			Scheme:               testScheme,
-			NetworkingNamespace:  testNamespace,
-			ProvisioningProvider: mockProvider,
-			StatusPollInterval:   1 * time.Second,
-			MaxJobHistory:        10,
+			Client:                   fakeClient,
+			APIReader:                fakeClient,
+			Scheme:                   testScheme,
+			mgr:                      &mockMulticlusterManager{targetClient: emptyTargetClient},
+			NetworkingNamespace:      testNamespace,
+			ComputeInstanceNamespace: testNamespace,
+			ProvisioningProvider:     mockProvider,
+			StatusPollInterval:       1 * time.Second,
+			MaxJobHistory:            10,
 		}
 	})
 
@@ -558,7 +611,7 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
 
 			// Update spec to set ComputeInstance, which changes config version
-			publicIP.Spec.ComputeInstance = "some-ci"
+			publicIP.Spec.ComputeInstance = testComputeInstance
 			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
 
 			mockProvider.getProvisionStatusFunc = func(
@@ -584,11 +637,12 @@ var _ = Describe("PublicIPReconciler", func() {
 		It("should set state to Attached when attach provisioning succeeds", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
-			// Start in Attaching state
-			publicIP.Spec.ComputeInstance = "some-ci"
+			// Start in Attaching state: persist spec first, then status.
+			publicIP.Spec.ComputeInstance = testComputeInstance
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+
 			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseProgressing
 			publicIP.Status.State = osacv1alpha1.PublicIPStateAttaching
-			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
 			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
 
 			mockProvider.triggerProvisionFunc = func(
@@ -628,8 +682,12 @@ var _ = Describe("PublicIPReconciler", func() {
 		It("should set state to Releasing when ComputeInstance is cleared on attached IP", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
-			// Start with an Attached PublicIP
-			publicIP.Spec.ComputeInstance = "some-ci"
+			// Start with an Attached PublicIP: set spec first, then status.
+			// With WithStatusSubresource, Update() strips status from the
+			// in-memory object, so Status().Update() must come last.
+			publicIP.Spec.ComputeInstance = testComputeInstance
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+
 			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseReady
 			publicIP.Status.State = osacv1alpha1.PublicIPStateAttached
 			publicIP.Status.DesiredConfigVersion = testConfigVersionUpdated
@@ -642,10 +700,10 @@ var _ = Describe("PublicIPReconciler", func() {
 					Timestamp:     metav1.NewTime(time.Now().UTC()),
 				},
 			}
-			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
 			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
 
-			// Clear ComputeInstance
+			// Clear ComputeInstance (re-read first to get current resourceVersion)
+			Expect(fakeClient.Get(testCtx, key, publicIP)).To(Succeed())
 			publicIP.Spec.ComputeInstance = ""
 			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
 
@@ -672,11 +730,12 @@ var _ = Describe("PublicIPReconciler", func() {
 		It("should set state to Allocated when detach provisioning succeeds", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
-			// Start in Releasing state
+			// Start in Releasing state: persist spec first, then status.
 			publicIP.Spec.ComputeInstance = ""
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+
 			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseProgressing
 			publicIP.Status.State = osacv1alpha1.PublicIPStateReleasing
-			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
 			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
 
 			mockProvider.triggerProvisionFunc = func(
@@ -754,18 +813,23 @@ var _ = Describe("PublicIPReconciler", func() {
 		It("should not change state on deletion", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
-			// Start with Allocated state
-			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseReady
-			publicIP.Status.State = osacv1alpha1.PublicIPStateAllocated
+			// Start with Allocated state: persist metadata first, then status.
 			publicIP.Finalizers = []string{osacPublicIPFinalizer}
 			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+
+			publicIP.Status.Phase = osacv1alpha1.PublicIPPhaseReady
+			publicIP.Status.State = osacv1alpha1.PublicIPStateAllocated
 			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
 
+			// Return a running deprovision job so handleDelete requeues before
+			// reaching the finalizer-removal Update (which the envtest server
+			// rejects when DeletionTimestamp is set in-memory).
 			mockProvider.triggerDeprovisionFunc = func(
-				ctx context.Context, resource client.Object,
+				_ context.Context, _ client.Object,
 			) (*provisioning.DeprovisionResult, error) {
 				return &provisioning.DeprovisionResult{
-					Action: provisioning.DeprovisionSkipped,
+					Action: provisioning.DeprovisionTriggered,
+					JobID:  "deprov-job",
 				}, nil
 			}
 
@@ -1191,6 +1255,131 @@ var _ = Describe("PublicIPReconciler", func() {
 			latestJob := provisioning.FindLatestJobByType(publicIP.Status.Jobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("retry-job"))
+		})
+	})
+
+	Context("getPublicIPAddress", func() {
+		It("should return IP from LoadBalancer Service ingress", func() {
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "osac-publicip-test-publicip",
+					Namespace: "metallb-system",
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: "203.0.113.42"},
+						},
+					},
+				},
+			}
+			targetClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(svc).Build()
+
+			ip := reconciler.getPublicIPAddress(testCtx, targetClient, "test-publicip")
+			Expect(ip).To(Equal("203.0.113.42"))
+		})
+
+		It("should return empty string when Service not found", func() {
+			targetClient := fake.NewClientBuilder().WithScheme(testScheme).Build()
+
+			ip := reconciler.getPublicIPAddress(testCtx, targetClient, "nonexistent")
+			Expect(ip).To(Equal(""))
+		})
+
+		It("should return empty string when ingress list is empty", func() {
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "osac-publicip-test-publicip",
+					Namespace: "metallb-system",
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{},
+					},
+				},
+			}
+			targetClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(svc).Build()
+
+			ip := reconciler.getPublicIPAddress(testCtx, targetClient, "test-publicip")
+			Expect(ip).To(Equal(""))
+		})
+
+		It("should return empty string when ingress IP is empty", func() {
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "osac-publicip-test-publicip",
+					Namespace: "metallb-system",
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: ""},
+						},
+					},
+				},
+			}
+			targetClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(svc).Build()
+
+			ip := reconciler.getPublicIPAddress(testCtx, targetClient, "test-publicip")
+			Expect(ip).To(Equal(""))
+		})
+
+		It("should not populate address before provisioning succeeds (temporal ordering, ADDR-01)", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			// A LoadBalancer Service with an assigned IP exists on the workload cluster.
+			// The guard condition (state==Allocated && address=="") must prevent
+			// address population until provisioning has completed.
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "osac-publicip-test-publicip",
+					Namespace: "metallb-system",
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{
+							{IP: "203.0.113.42"},
+						},
+					},
+				},
+			}
+			targetClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(svc).Build()
+			reconciler.mgr = &mockMulticlusterManager{targetClient: targetClient}
+
+			// Keep jobs in Running state so OnSuccess does not fire and
+			// override the state we set for each sub-test.
+			mockProvider.getProvisionStatusFunc = func(
+				_ context.Context, _ client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateRunning,
+					Message: "Job running",
+				}, nil
+			}
+
+			// Pending state: address must NOT be populated (pre-provisioning).
+			// Call handleUpdate and verify the in-memory object.
+			pendingIP := publicIP.DeepCopy()
+			pendingIP.Status.Phase = osacv1alpha1.PublicIPPhaseProgressing
+			pendingIP.Status.State = osacv1alpha1.PublicIPStatePending
+			pendingIP.Status.Address = ""
+
+			_, err := reconciler.handleUpdate(testCtx, pendingIP)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pendingIP.Status.Address).To(Equal(""), "address must not be populated in Pending state")
+
+			// Allocated state: address SHOULD be populated (post-provisioning).
+			// Re-read the object from the fake client to get the current
+			// resourceVersion (handleUpdate modifies the object in the store).
+			allocatedIP := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, allocatedIP)).To(Succeed())
+			allocatedIP.Status.State = osacv1alpha1.PublicIPStateAllocated
+			allocatedIP.Status.Address = ""
+
+			_, err = reconciler.handleUpdate(testCtx, allocatedIP)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allocatedIP.Status.Address).To(Equal("203.0.113.42"), "address should be populated in Allocated state")
 		})
 	})
 })

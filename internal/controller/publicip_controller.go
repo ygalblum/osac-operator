@@ -21,9 +21,11 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -105,6 +107,7 @@ func NewPublicIPReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicips/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicippools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get
 
 // Reconcile handles create/update/delete for a PublicIP CR.
 // On create/update it ensures a finalizer, resolves the parent pool, and runs provisioning.
@@ -263,6 +266,27 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 		publicIP.Status.Phase = v1alpha1.PublicIPPhaseProgressing
 		if publicIP.Status.State == "" {
 			publicIP.Status.State = v1alpha1.PublicIPStatePending
+		}
+	}
+
+	// Populate address after provisioning succeeds (per D-01, D-06, ADDR-01).
+	//
+	// Temporal ordering guarantee: state == Allocated is set exclusively by the
+	// Phase 1 OnSuccess callback in RunProvisioningLifecycle, which fires only
+	// after the AAP provisioning job reports JobStateSucceeded. Therefore this
+	// guard condition ensures address population happens strictly after
+	// provisioning completes, never before. The same temporal pattern is used by
+	// ComputeInstance (getFirstVMIIPAddress runs after VM provisioning succeeds).
+	if publicIP.Status.State == v1alpha1.PublicIPStateAllocated && publicIP.Status.Address == "" {
+		targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
+		if err != nil {
+			log.Error(err, "failed to get target cluster client for address lookup")
+		} else {
+			ipAddress := r.getPublicIPAddress(ctx, targetClient, publicIP.Name)
+			if ipAddress != "" {
+				publicIP.Status.Address = ipAddress
+				log.Info("populated PublicIP address from LoadBalancer Service", "address", ipAddress)
+			}
 		}
 	}
 
@@ -470,6 +494,33 @@ func (r *PublicIPReconciler) handleDeprovisioning(ctx context.Context, publicIP 
 		"state", status.State,
 		"message", updatedJob.Message)
 	return ctrl.Result{}, nil
+}
+
+// getPublicIPAddress fetches the LoadBalancer Service created by the AAP create_public_ip
+// playbook and returns the assigned IP from status.loadBalancer.ingress[0].ip.
+// Returns "" on any error or if no IP is assigned yet (best-effort, per D-03).
+func (r *PublicIPReconciler) getPublicIPAddress(ctx context.Context, targetClient client.Client, publicIPName string) string {
+	log := ctrllog.FromContext(ctx)
+
+	svc := &corev1.Service{}
+	serviceName := "osac-publicip-" + publicIPName
+	if err := targetClient.Get(ctx, types.NamespacedName{Namespace: "metallb-system", Name: serviceName}, svc); err != nil {
+		log.Error(err, "failed to get LoadBalancer Service", "namespace", "metallb-system", "name", serviceName)
+		return ""
+	}
+
+	if len(svc.Status.LoadBalancer.Ingress) == 0 {
+		log.Info("LoadBalancer Service has no ingress IP yet", "name", serviceName)
+		return ""
+	}
+
+	ip := svc.Status.LoadBalancer.Ingress[0].IP
+	if ip == "" {
+		log.Info("LoadBalancer Service ingress IP is empty", "name", serviceName)
+		return ""
+	}
+
+	return ip
 }
 
 // SetupWithManager registers this controller with the multicluster manager.
