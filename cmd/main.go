@@ -473,7 +473,7 @@ func setupNetworkingControllers(
 		provisioning.ProviderType(helpers.GetEnvWithDefault(envProvisioningProvider, string(provisioning.ProviderTypeAAP))),
 		os.Getenv(envPublicIPAttachWebhook), os.Getenv(envPublicIPDetachWebhook),
 		aapURL, aapToken,
-		"osac-attach-public-ip", "osac-detach-public-ip",
+		fmt.Sprintf("%s-attach-public-ip", templatePrefix), fmt.Sprintf("%s-detach-public-ip", templatePrefix),
 		"", // no prefix needed: explicit template names are always used
 		aapInsecureSkipVerify,
 		0, // minimumRequestInterval: only relevant for EDA rate limiting

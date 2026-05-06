@@ -292,14 +292,7 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 
 	r.maybePopulateAddress(ctx, publicIP)
 
-	switch publicIP.Status.State {
-	case v1alpha1.PublicIPStateAttaching:
-		return r.handleAttaching(ctx, publicIP)
-	case v1alpha1.PublicIPStateReleasing:
-		return r.handleDetaching(ctx, publicIP, priorCIUUID)
-	default:
-		return r.handleProvisioning(ctx, publicIP, priorCIUUID)
-	}
+	return r.routeProvisioning(ctx, publicIP, priorCIUUID)
 }
 
 // maybePopulateAddress sets status.address from the MetalLB LoadBalancer Service
@@ -582,6 +575,36 @@ func (r *PublicIPReconciler) handleDelete(ctx context.Context, publicIP *v1alpha
 	return ctrl.Result{}, nil
 }
 
+// routeProvisioning dispatches to the correct handler based on state. Failed state
+// is routed back to the handler that owns the failed job to prevent the create
+// playbook from running after a failed attach (which could conflict with a
+// partially-moved MetalLB Service).
+func (r *PublicIPReconciler) routeProvisioning(ctx context.Context, publicIP *v1alpha1.PublicIP, priorCIUUID string) (ctrl.Result, error) {
+	switch publicIP.Status.State {
+	case v1alpha1.PublicIPStateAttaching:
+		return r.handleAttaching(ctx, publicIP)
+	case v1alpha1.PublicIPStateReleasing:
+		return r.handleDetaching(ctx, publicIP, priorCIUUID)
+	case v1alpha1.PublicIPStateFailed:
+		// Determine which handler owns the failure by inspecting the latest
+		// failed job type. Without this, a failed attach would fall through to
+		// handleProvisioning and re-run osac-create-public-ip while the MetalLB
+		// Service is partially moved to the VM namespace.
+		latestAttach := provisioning.FindLatestJobByType(publicIP.Status.Jobs, v1alpha1.JobTypeAttach)
+		if latestAttach != nil && latestAttach.State == v1alpha1.JobStateFailed {
+			return r.handleAttaching(ctx, publicIP)
+		}
+		latestDetach := provisioning.FindLatestJobByType(publicIP.Status.Jobs, v1alpha1.JobTypeDetach)
+		if latestDetach != nil && latestDetach.State == v1alpha1.JobStateFailed {
+			return r.handleDetaching(ctx, publicIP, priorCIUUID)
+		}
+		// Provision failure: handleProvisioning provides backoff/retry
+		return r.handleProvisioning(ctx, publicIP, priorCIUUID)
+	default:
+		return r.handleProvisioning(ctx, publicIP, priorCIUUID)
+	}
+}
+
 // handleAttaching triggers an AAP attach job (osac-attach-public-ip) via the
 // PublicIPAttachmentProvider and polls until completion. On success, state transitions
 // to Attached. Jobs are tracked as JobTypeAttach in Status.Jobs.
@@ -754,6 +777,9 @@ func (r *PublicIPReconciler) handleDetaching(ctx context.Context, publicIP *v1al
 				return ctrl.Result{}, err
 			}
 			log.Info("detach job triggered", "jobID", result.JobID)
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		default:
+			log.Info("unknown deprovision action returned by provider", "action", result.Action)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 	}
