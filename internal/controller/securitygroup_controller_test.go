@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -666,10 +667,30 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		})
 
 		It("should still handle delete for unmanaged SecurityGroup with finalizer", func() {
+			// Use envtest (k8sClient) instead of fakeClient so we can go through
+			// Reconcile and exercise the DeletionTimestamp.IsZero() guard.
+			envMockProvider := &mockProvisioningProvider{
+				name: "mock-aap",
+				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.DeprovisionResult, error) {
+					return &provisioning.DeprovisionResult{
+						Action: provisioning.DeprovisionSkipped,
+					}, nil
+				},
+			}
+			envReconciler := &SecurityGroupReconciler{
+				Client:               k8sClient,
+				APIReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				NetworkingNamespace:  "default",
+				ProvisioningProvider: envMockProvider,
+				StatusPollInterval:   1 * time.Second,
+				MaxJobHistory:        10,
+			}
+
 			managedThenUnmanaged := &osacv1alpha1.SecurityGroup{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "managed-then-unmanaged",
-					Namespace: "test-namespace",
+					Namespace: "default",
 					Annotations: map[string]string{
 						osacManagementStateAnnotation: ManagementStateUnmanaged,
 					},
@@ -679,31 +700,18 @@ var _ = Describe("SecurityGroupReconciler", func() {
 					VirtualNetwork: "test-vnet-uuid",
 				},
 			}
-			Expect(fakeClient.Create(ctx, managedThenUnmanaged)).To(Succeed())
+			Expect(k8sClient.Create(ctx, managedThenUnmanaged)).To(Succeed())
 
 			key := types.NamespacedName{Name: managedThenUnmanaged.Name, Namespace: managedThenUnmanaged.Namespace}
 
-			mockProvider.triggerDeprovisionFunc = func(
-				ctx context.Context, resource client.Object,
-			) (*provisioning.DeprovisionResult, error) {
-				return &provisioning.DeprovisionResult{
-					Action: provisioning.DeprovisionSkipped,
-				}, nil
-			}
+			Expect(k8sClient.Delete(ctx, managedThenUnmanaged)).To(Succeed())
 
-			fetched := &osacv1alpha1.SecurityGroup{}
-			Expect(fakeClient.Get(ctx, key, fetched)).To(Succeed())
-			now := metav1.Now()
-			fetched.DeletionTimestamp = &now
+			_, err := envReconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
 
-			Expect(fetched.ObjectMeta.DeletionTimestamp.IsZero()).To(BeFalse())
-
-			// The fake client's Update will fail because DeletionTimestamp is
-			// immutable, but the important assertion is that the finalizer was
-			// removed from the in-memory object.
-			_, _ = reconciler.handleDelete(ctx, fetched)
-
-			Expect(fetched.Finalizers).NotTo(ContainElement(osacSecurityGroupFinalizer))
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, key, &osacv1alpha1.SecurityGroup{}))
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
 		})
 
 		It("should ignore SecurityGroup with management-state unmanaged annotation", func() {

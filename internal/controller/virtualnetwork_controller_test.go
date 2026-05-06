@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -564,9 +565,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Eventually(func() bool {
-				return client.IgnoreNotFound(
-					k8sClient.Get(ctx, key, &osacv1alpha1.VirtualNetwork{}),
-				) == nil
+				return errors.IsNotFound(k8sClient.Get(ctx, key, &osacv1alpha1.VirtualNetwork{}))
 			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
 		})
 	})
