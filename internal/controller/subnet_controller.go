@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -122,13 +123,25 @@ func (r *SubnetReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 
 	if !equality.Semantic.DeepEqual(subnet.Status, *oldstatus) {
 		log.Info("status requires update")
-		if err := r.Status().Update(ctx, subnet); err != nil {
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(subnet), subnet.Status); err != nil {
 			return res, err
 		}
 	}
 
 	log.Info("end reconcile")
 	return res, err
+}
+
+// updateStatusWithRetry updates the subnet status with retry on conflict.
+func (r *SubnetReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.SubnetStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.Subnet{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -265,7 +278,9 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(subnet), &v1alpha1.Subnet{})
 		},
-		func() error { return r.Status().Update(ctx, subnet) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(subnet), subnet.Status)
+		},
 	)
 }
 

@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -129,9 +130,8 @@ func (r *PublicIPPoolReconciler) Reconcile(ctx context.Context, req mcreconcile.
 
 	if !equality.Semantic.DeepEqual(pool.Status, *oldstatus) {
 		log.Info("status requires update")
-		if updateErr := r.Status().Update(ctx, pool); updateErr != nil {
-			log.Error(updateErr, "failed to update status")
-			return res, updateErr
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(pool), pool.Status); err != nil {
+			return res, err
 		}
 	}
 
@@ -241,7 +241,9 @@ func (r *PublicIPPoolReconciler) handleProvisioning(ctx context.Context, pool *v
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
 				ctx, r.APIReader, client.ObjectKeyFromObject(pool), &v1alpha1.PublicIPPool{})
 		},
-		func() error { return r.Status().Update(ctx, pool) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(pool), pool.Status)
+		},
 	)
 }
 
@@ -337,6 +339,18 @@ func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool 
 		"state", status.State,
 		"message", updatedJob.Message)
 	return ctrl.Result{}, nil
+}
+
+// updateStatusWithRetry updates the public IP pool status with retry on conflict.
+func (r *PublicIPPoolReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.PublicIPPoolStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.PublicIPPool{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // SetupWithManager registers this controller with the multicluster manager.

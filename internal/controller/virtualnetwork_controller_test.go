@@ -164,6 +164,49 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(latestJob.JobID).To(Equal("test-job-123"))
 		})
 
+		It("should persist job status even when resource is concurrently modified", func() {
+			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      vnet.Name,
+					Namespace: vnet.Namespace,
+				},
+			}}
+
+			// First reconcile: adds finalizer + sets annotation, returns early
+			_, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Simulate feedback controller: during TriggerProvision, modify
+			// the resource's metadata (add feedback finalizer) so the
+			// resourceVersion changes before the status flush runs.
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				fresh := &osacv1alpha1.VirtualNetwork{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, fresh)).To(Succeed())
+				fresh.Finalizers = append(fresh.Finalizers, "osac.openshift.io/virtualnetwork-feedback")
+				Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
+
+				return &provisioning.ProvisionResult{
+					JobID:        "concurrent-job-123",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+
+			// Second reconcile: triggers job — the concurrent modification
+			// must not prevent the job from being recorded in status.
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the job was persisted to the API server
+			updatedVnet := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updatedVnet)).To(Succeed())
+			latestJob := provisioning.FindLatestJobByType(updatedVnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestJob).NotTo(BeNil())
+			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
+		})
+
 		It("should requeue if ImplementationStrategy not set", func() {
 			// Create VirtualNetwork without ImplementationStrategy
 			vnetNoStrategy := &osacv1alpha1.VirtualNetwork{

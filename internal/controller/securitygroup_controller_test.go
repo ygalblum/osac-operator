@@ -163,6 +163,42 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.SecurityGroupPhaseProgressing))
 		})
 
+		It("should persist job status even when resource is concurrently modified", func() {
+			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
+
+			// First reconcile: adds finalizer + sets annotation, returns early
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Simulate feedback controller: during TriggerProvision, modify
+			// the resource's metadata (add feedback finalizer) so the
+			// resourceVersion changes before the status flush runs.
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				fresh := &osacv1alpha1.SecurityGroup{}
+				Expect(fakeClient.Get(ctx, key, fresh)).To(Succeed())
+				fresh.Finalizers = append(fresh.Finalizers, "osac.openshift.io/securitygroup-feedback")
+				Expect(fakeClient.Update(ctx, fresh)).To(Succeed())
+
+				return &provisioning.ProvisionResult{
+					JobID:        "concurrent-job-123",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+
+			// Second reconcile: triggers job — the concurrent modification
+			// must not prevent the job from being recorded in status.
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the job was persisted
+			updated := &osacv1alpha1.SecurityGroup{}
+			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
+			latestJob := provisioning.FindLatestJobByType(updated.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestJob).NotTo(BeNil())
+			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
+		})
+
 		It("should lookup parent VirtualNetwork", func() {
 			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
 

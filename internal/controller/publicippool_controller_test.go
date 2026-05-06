@@ -140,6 +140,41 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPoolPhaseProgressing))
 		})
 
+		It("should persist job status even when resource is concurrently modified", func() {
+			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+
+			// Simulate feedback controller: during TriggerProvision, modify
+			// the resource's metadata (add feedback finalizer) so the
+			// resourceVersion changes before the status flush runs.
+			// Set mock before any reconcile because PublicIPPool triggers
+			// provisioning in the same pass as adding the finalizer.
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				fresh := &osacv1alpha1.PublicIPPool{}
+				Expect(fakeClient.Get(ctx, key, fresh)).To(Succeed())
+				fresh.Finalizers = append(fresh.Finalizers, "osac.openshift.io/publicippool-feedback")
+				Expect(fakeClient.Update(ctx, fresh)).To(Succeed())
+
+				return &provisioning.ProvisionResult{
+					JobID:        "concurrent-job-123",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+
+			// Reconcile adds finalizer and triggers provisioning in one pass.
+			// The concurrent modification must not prevent the job from
+			// being recorded in status.
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the job was persisted
+			updated := &osacv1alpha1.PublicIPPool{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			latestJob := provisioning.FindLatestJobByType(updated.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestJob).NotTo(BeNil())
+			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
+		})
+
 		It("should set ConfigurationApplied condition to True", func() {
 			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
 

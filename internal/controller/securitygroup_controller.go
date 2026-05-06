@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -115,9 +116,8 @@ func (r *SecurityGroupReconciler) Reconcile(ctx context.Context, req mcreconcile
 
 	if !equality.Semantic.DeepEqual(sg.Status, *oldstatus) {
 		log.Info("status requires update")
-		if updateErr := r.Status().Update(ctx, sg); updateErr != nil {
-			log.Error(updateErr, "failed to update status")
-			return res, updateErr
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(sg), sg.Status); err != nil {
+			return res, err
 		}
 	}
 
@@ -245,7 +245,9 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(sg), &v1alpha1.SecurityGroup{})
 		},
-		func() error { return r.Status().Update(ctx, sg) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(sg), sg.Status)
+		},
 	)
 }
 
@@ -340,6 +342,18 @@ func (r *SecurityGroupReconciler) handleDeprovisioning(ctx context.Context, sg *
 		"state", status.State,
 		"message", updatedJob.Message)
 	return ctrl.Result{}, nil
+}
+
+// updateStatusWithRetry updates the security group status with retry on conflict.
+func (r *SecurityGroupReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.SecurityGroupStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.SecurityGroup{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.

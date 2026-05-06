@@ -148,6 +148,49 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(updatedSubnet.Status.Phase).To(Equal(osacv1alpha1.SubnetPhaseProgressing))
 		})
 
+		It("should persist job status even when resource is concurrently modified", func() {
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnet.Name,
+					Namespace: subnet.Namespace,
+				},
+			}}
+
+			// First reconcile: adds finalizer + sets annotation, returns early
+			_, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Simulate feedback controller: during TriggerProvision, modify
+			// the resource's metadata (add feedback finalizer) so the
+			// resourceVersion changes before the status flush runs.
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				fresh := &osacv1alpha1.Subnet{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, fresh)).To(Succeed())
+				fresh.Finalizers = append(fresh.Finalizers, "osac.openshift.io/subnet-feedback")
+				Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
+
+				return &provisioning.ProvisionResult{
+					JobID:        "concurrent-job-123",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+
+			// Second reconcile: triggers job — the concurrent modification
+			// must not prevent the job from being recorded in status.
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the job was persisted to the API server
+			updatedSubnet := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, updatedSubnet)).To(Succeed())
+			latestJob := provisioning.FindLatestJobByType(updatedSubnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestJob).NotTo(BeNil())
+			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
+		})
+
 		It("should requeue when parent VirtualNetwork not found", func() {
 			// Create subnet with non-existent parent
 			subnetNoParent := &osacv1alpha1.Subnet{

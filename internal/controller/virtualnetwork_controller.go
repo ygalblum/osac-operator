@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -115,7 +116,7 @@ func (r *VirtualNetworkReconciler) Reconcile(ctx context.Context, req mcreconcil
 
 	if !equality.Semantic.DeepEqual(vnet.Status, *oldstatus) {
 		log.Info("status requires update")
-		if err := r.Status().Update(ctx, vnet); err != nil {
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(vnet), vnet.Status); err != nil {
 			return res, err
 		}
 	}
@@ -199,7 +200,9 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(vnet), &v1alpha1.VirtualNetwork{})
 		},
-		func() error { return r.Status().Update(ctx, vnet) },
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(vnet), vnet.Status)
+		},
 	)
 }
 
@@ -324,6 +327,18 @@ func (r *VirtualNetworkReconciler) handleDeprovisioning(ctx context.Context, vne
 			"message", updatedJob.Message)
 		return ctrl.Result{}, nil
 	}
+}
+
+// updateStatusWithRetry updates the virtual network status with retry on conflict.
+func (r *VirtualNetworkReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.VirtualNetworkStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.VirtualNetwork{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // NetworkingNamespacePredicate filters events by namespace for networking resources.
