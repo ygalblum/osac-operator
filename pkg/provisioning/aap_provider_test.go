@@ -158,6 +158,62 @@ var _ = Describe("AAPProvider", func() {
 			})
 		})
 
+		Context("with tenant storage classes in context", func() {
+			BeforeEach(func() {
+				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+				aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+					return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
+				}
+			})
+
+			It("should inject tenant_storage_classes into extra_vars", func() {
+				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+					edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
+					Expect(edaEvent).To(HaveKey("payload"))
+					Expect(edaEvent).To(HaveKey("tenant_storage_classes"))
+					scList := edaEvent["tenant_storage_classes"].([]map[string]string)
+					Expect(scList).To(HaveLen(2))
+					Expect(scList[0]).To(Equal(map[string]string{"name": "ceph-fast", "tier": "fast"}))
+					Expect(scList[1]).To(Equal(map[string]string{"name": "ceph-default", "tier": "default"}))
+					return &aap.LaunchJobTemplateResponse{JobID: 789}, nil
+				}
+
+				ctx = provisioning.WithTenantStorageClasses(ctx, []v1alpha1.ResolvedStorageClass{
+					{Name: "ceph-fast", Tier: "fast"},
+					{Name: "ceph-default", Tier: "default"},
+				})
+
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-resource",
+						Namespace: "default",
+					},
+				}
+				result, err := provider.TriggerProvision(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.JobID).To(Equal("789"))
+			})
+
+			It("should not inject tenant_storage_classes when context has no storage classes", func() {
+				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+					edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
+					Expect(edaEvent).To(HaveKey("payload"))
+					Expect(edaEvent).NotTo(HaveKey("tenant_storage_classes"))
+					return &aap.LaunchJobTemplateResponse{JobID: 790}, nil
+				}
+
+				instance := &v1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-resource",
+						Namespace: "default",
+					},
+				}
+				result, err := provider.TriggerProvision(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.JobID).To(Equal("790"))
+			})
+		})
+
 		Context("when template not configured", func() {
 			BeforeEach(func() {
 				provider = provisioning.NewAAPProvider(aapClient, "", "deprovision-job")
