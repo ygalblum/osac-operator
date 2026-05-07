@@ -763,6 +763,8 @@ func (r *PublicIPReconciler) handleDetaching(ctx context.Context, publicIP *v1al
 			log.Info("provider skipped detach")
 			publicIP.Status.Phase = v1alpha1.PublicIPPhaseReady
 			publicIP.Status.State = v1alpha1.PublicIPStateAllocated
+			// Remove the CI detach finalizer even when the provider skips detach,
+			// otherwise it blocks the ComputeInstance from being garbage collected.
 			if priorCIUUID != "" {
 				if err := r.maybeRemoveCIFinalizer(ctx, priorCIUUID, ""); err != nil {
 					log.Error(err, "failed to remove CI finalizer after skipped detach",

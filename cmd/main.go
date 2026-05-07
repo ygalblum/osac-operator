@@ -465,11 +465,12 @@ func setupNetworkingControllers(
 	// Create a dedicated provider for PublicIP attach/detach operations.
 	// Uses explicit template names because TriggerProvision hardcodes action="create"
 	// and TriggerDeprovision hardcodes action="delete" in resolveTemplateName. Explicit
-	// names bypass the action resolution so TriggerProvision maps to osac-attach-public-ip
-	// and TriggerDeprovision maps to osac-detach-public-ip.
+	// names bypass the action resolution so TriggerProvision maps to
+	// {prefix}-attach-public-ip and TriggerDeprovision maps to {prefix}-detach-public-ip.
 	// This provider will move to the PublicIPAttachment controller when that CRD is introduced.
 	// Poll interval is discarded (_) because we reuse statusPollInterval from the
-	// shared networking setup above.
+	// shared networking setup above. minimumRequestInterval is passed for EDA webhook
+	// rate limiting when OSAC_PROVISIONING_PROVIDER=eda.
 	publicIPAttachmentProvider, _, err := createProvider(
 		provisioning.ProviderType(helpers.GetEnvWithDefault(envProvisioningProvider, string(provisioning.ProviderTypeAAP))),
 		os.Getenv(envPublicIPAttachWebhook), os.Getenv(envPublicIPDetachWebhook),
