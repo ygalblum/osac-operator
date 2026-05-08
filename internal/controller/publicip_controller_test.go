@@ -1295,6 +1295,46 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(exists).To(BeFalse())
 		})
 
+		It("should preserve publicip-target-namespace annotation during detach", func() {
+			pip := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ip-releasing",
+					Namespace: testNamespace,
+					Annotations: map[string]string{
+						osacPublicIPTargetNamespaceAnnotation: testTenantNS,
+					},
+					Finalizers: []string{osacPublicIPFinalizer},
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool: testPoolUUID,
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(pip, parentPool).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}).
+				Build()
+
+			pip.Status.State = osacv1alpha1.PublicIPStateReleasing
+			Expect(fc.Status().Update(testCtx, pip)).To(Succeed())
+
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				ComputeInstanceNamespace: testCINamespace,
+			}
+
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(pip), pip)).To(Succeed())
+
+			changed, _, err := rec.syncComputeInstanceTargetNamespaceAnnotation(testCtx, pip)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(changed).To(BeFalse(), "should not change annotation during detach")
+			_, exists := pip.Annotations[osacPublicIPTargetNamespaceAnnotation]
+			Expect(exists).To(BeTrue(), "annotation should be preserved during Releasing state")
+		})
+
 		It("should requeue when ComputeInstance not found", func() {
 			ipMissingCI := &osacv1alpha1.PublicIP{
 				ObjectMeta: metav1.ObjectMeta{
