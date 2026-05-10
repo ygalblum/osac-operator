@@ -329,9 +329,12 @@ func (r *PublicIPReconciler) syncComputeInstanceTargetNamespaceAnnotation(
 
 	if publicIP.Spec.ComputeInstance == "" {
 		if _, ok := publicIP.Annotations[osacPublicIPTargetNamespaceAnnotation]; ok {
-			delete(publicIP.Annotations, osacPublicIPTargetNamespaceAnnotation)
-			log.Info("cleared publicip-target-namespace annotation")
-			return true, false, nil
+			if publicIP.Status.State == v1alpha1.PublicIPStateAllocated {
+				delete(publicIP.Annotations, osacPublicIPTargetNamespaceAnnotation)
+				log.Info("cleared publicip-target-namespace annotation")
+				return true, false, nil
+			}
+			log.Info("preserving publicip-target-namespace annotation during detach")
 		}
 		return false, false, nil
 	}
@@ -877,14 +880,23 @@ func (r *PublicIPReconciler) handleProvisioning(ctx context.Context, publicIP *v
 					// so the address population guard in handleUpdate never fires.
 					// Populate address here to cover that path.
 					if publicIP.Status.Address == "" {
-						if targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster); err == nil {
-							if ip := r.getPublicIPAddress(ctx, targetClient, publicIP.Name); ip != "" {
-								publicIP.Status.Address = ip
-							}
+						if targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster); err != nil {
+							log.Error(err, "failed to get target cluster client for address lookup on attach")
+						} else if ip := r.getPublicIPAddress(ctx, targetClient, publicIP.Name); ip != "" {
+							publicIP.Status.Address = ip
 						}
 					}
 				} else {
 					publicIP.Status.State = v1alpha1.PublicIPStateAllocated
+					// Populate address immediately on allocation success. For detach, address is
+					// usually already set so the guard no-ops.
+					if publicIP.Status.Address == "" {
+						if targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster); err != nil {
+							log.Error(err, "failed to get target cluster client for address lookup on allocation")
+						} else if ip := r.getPublicIPAddress(ctx, targetClient, publicIP.Name); ip != "" {
+							publicIP.Status.Address = ip
+						}
+					}
 					// After detach completes, attempt CI finalizer removal
 					if priorCIUUID != "" {
 						if err := r.maybeRemoveCIFinalizer(ctx, priorCIUUID, ""); err != nil {

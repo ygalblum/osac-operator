@@ -221,7 +221,7 @@ func (t *publicIPFeedbackReconcilerTask) handleDelete() {
 		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_FAILED)
 		return
 	}
-	t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_RELEASING)
+	t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_DELETING)
 }
 
 func (t *publicIPFeedbackReconcilerTask) syncState(ctx context.Context) {

@@ -592,6 +592,59 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateAllocated))
 		})
 
+		It("should populate address in OnSuccess on initial allocation when Service already has an IP", func() {
+			// This test covers the new code path added to the OnSuccess callback inside
+			// handleProvisioning: when state transitions to Allocated and the parking
+			// Service already has an ingress IP, the address must be set immediately
+			// within the same reconcile pass — no extra round-trip through handleUpdate.
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      publicIPServiceNamePrefix + publicIP.Name,
+					Namespace: defaultMetalLBNamespace,
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: []corev1.LoadBalancerIngress{{IP: "203.0.113.10"}},
+					},
+				},
+			}
+			targetClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(svc).Build()
+			reconciler.mgr = &mockMulticlusterManager{targetClient: targetClient}
+
+			mockProvider.triggerProvisionFunc = func(
+				_ context.Context, _ client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "job-alloc-addr",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Job triggered",
+				}, nil
+			}
+			mockProvider.getProvisionStatusFunc = func(
+				_ context.Context, _ client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateSucceeded,
+					Message: "Provisioning completed",
+				}, nil
+			}
+
+			// Pass 1: finalizer, Pass 2: trigger job, Pass 3: poll -> Succeeded -> OnSuccess
+			for i := 0; i < 3; i++ {
+				_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			updated := &osacv1alpha1.PublicIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateAllocated))
+			Expect(updated.Status.Address).To(Equal("203.0.113.10"),
+				"address should be populated immediately in OnSuccess, not deferred to the next reconcile")
+		})
+
 		It("should set state to Attaching when ComputeInstance is set on allocated IP", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
@@ -1260,8 +1313,8 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(updated.Annotations[osacPublicIPTargetNamespaceAnnotation]).To(Equal(testTenantNS))
 		})
 
-		It("should clear publicip-target-namespace annotation when computeInstance is cleared", func() {
-			ipWithAnnotation := &osacv1alpha1.PublicIP{
+		It("should clear publicip-target-namespace annotation when computeInstance is cleared and state is Allocated", func() {
+			pip := &osacv1alpha1.PublicIP{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "ip-clear-ci",
 					Namespace: testNamespace,
@@ -1273,26 +1326,103 @@ var _ = Describe("PublicIPReconciler", func() {
 				Spec: osacv1alpha1.PublicIPSpec{
 					Pool: testPoolUUID,
 				},
+				Status: osacv1alpha1.PublicIPStatus{
+					State: osacv1alpha1.PublicIPStateAllocated,
+				},
 			}
 
-			clearClient := fake.NewClientBuilder().
+			rec := &PublicIPReconciler{
+				Client:                   fake.NewClientBuilder().WithScheme(testScheme).Build(),
+				APIReader:                fake.NewClientBuilder().WithScheme(testScheme).Build(),
+				Scheme:                   testScheme,
+				ComputeInstanceNamespace: testCINamespace,
+			}
+
+			changed, _, err := rec.syncComputeInstanceTargetNamespaceAnnotation(testCtx, pip)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(changed).To(BeTrue(), "should report annotation changed")
+			_, exists := pip.Annotations[osacPublicIPTargetNamespaceAnnotation]
+			Expect(exists).To(BeFalse(), "annotation should be cleared when state is Allocated")
+		})
+
+		It("should preserve publicip-target-namespace annotation during detach (Releasing state)", func() {
+			pip := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ip-releasing",
+					Namespace: testNamespace,
+					Annotations: map[string]string{
+						osacPublicIPTargetNamespaceAnnotation: testTenantNS,
+					},
+					Finalizers: []string{osacPublicIPFinalizer},
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool: testPoolUUID,
+				},
+			}
+
+			fc := fake.NewClientBuilder().
 				WithScheme(testScheme).
-				WithObjects(ipWithAnnotation, parentPool).
+				WithObjects(pip, parentPool).
 				WithStatusSubresource(&osacv1alpha1.PublicIP{}).
 				Build()
 
-			reconciler.Client = clearClient
-			reconciler.APIReader = clearClient
+			pip.Status.State = osacv1alpha1.PublicIPStateReleasing
+			Expect(fc.Status().Update(testCtx, pip)).To(Succeed())
 
-			key := types.NamespacedName{Name: ipWithAnnotation.Name, Namespace: ipWithAnnotation.Namespace}
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				ComputeInstanceNamespace: testCINamespace,
+			}
 
-			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(pip), pip)).To(Succeed())
+
+			changed, _, err := rec.syncComputeInstanceTargetNamespaceAnnotation(testCtx, pip)
 			Expect(err).NotTo(HaveOccurred())
+			Expect(changed).To(BeFalse(), "should not change annotation during detach")
+			_, exists := pip.Annotations[osacPublicIPTargetNamespaceAnnotation]
+			Expect(exists).To(BeTrue(), "annotation should be preserved during Releasing state")
+		})
 
-			updated := &osacv1alpha1.PublicIP{}
-			Expect(clearClient.Get(testCtx, key, updated)).To(Succeed())
-			_, exists := updated.Annotations[osacPublicIPTargetNamespaceAnnotation]
-			Expect(exists).To(BeFalse())
+		It("should preserve publicip-target-namespace annotation when Attached and computeInstance cleared", func() {
+			pip := &osacv1alpha1.PublicIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ip-attached-detaching",
+					Namespace: testNamespace,
+					Annotations: map[string]string{
+						osacPublicIPTargetNamespaceAnnotation: testTenantNS,
+					},
+					Finalizers: []string{osacPublicIPFinalizer},
+				},
+				Spec: osacv1alpha1.PublicIPSpec{
+					Pool: testPoolUUID,
+				},
+			}
+
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(pip, parentPool).
+				WithStatusSubresource(&osacv1alpha1.PublicIP{}).
+				Build()
+
+			pip.Status.State = osacv1alpha1.PublicIPStateAttached
+			Expect(fc.Status().Update(testCtx, pip)).To(Succeed())
+
+			rec := &PublicIPReconciler{
+				Client:                   fc,
+				APIReader:                fc,
+				Scheme:                   testScheme,
+				ComputeInstanceNamespace: testCINamespace,
+			}
+
+			Expect(fc.Get(testCtx, client.ObjectKeyFromObject(pip), pip)).To(Succeed())
+
+			changed, _, err := rec.syncComputeInstanceTargetNamespaceAnnotation(testCtx, pip)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(changed).To(BeFalse(), "should not change annotation when Attached and about to detach")
+			_, exists := pip.Annotations[osacPublicIPTargetNamespaceAnnotation]
+			Expect(exists).To(BeTrue(), "annotation should be preserved during Attached state before detach")
 		})
 
 		It("should requeue when ComputeInstance not found", func() {

@@ -511,7 +511,7 @@ var _ = Describe("PublicIPFeedbackController", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(mockServer.updates).To(HaveLen(1))
-			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_RELEASING))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_DELETING))
 
 			updated := &v1alpha1.PublicIP{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace}, updated)).To(Succeed())
@@ -610,7 +610,7 @@ var _ = Describe("PublicIPFeedbackController", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(mockServer.updates).To(HaveLen(1))
-			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_RELEASING))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.PublicIPState_PUBLIC_IP_STATE_DELETING))
 
 			Expect(mockServer.signals).To(HaveLen(1))
 			Expect(mockServer.signals[0]).To(Equal(publicIPID))
