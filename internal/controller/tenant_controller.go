@@ -411,6 +411,14 @@ func (r *TenantReconciler) handleStorageDeprovisioning(ctx context.Context, inst
 				return ctrl.Result{RequeueAfter: rateLimitErr.RetryAfter}, nil
 			}
 			log.Error(err, "failed to trigger storage deprovisioning")
+			newJob := v1alpha1.JobStatus{
+				JobID:     "",
+				Type:      v1alpha1.JobTypeDeprovision,
+				Timestamp: metav1.NewTime(time.Now().UTC()),
+				State:     v1alpha1.JobStateFailed,
+				Message:   fmt.Sprintf("Failed to trigger storage deprovisioning: %v", err),
+			}
+			instance.Status.Jobs = provisioning.AppendJob(instance.Status.Jobs, newJob, r.MaxJobHistory)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 

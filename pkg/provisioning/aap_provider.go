@@ -228,7 +228,7 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, resource client
 		// EDA jobs as terminal since EDA is only used for CI/ClusterOrder today.
 		phase, err := getResourcePhase(resource)
 		if err != nil {
-			log.Info("EDA provision job on unsupported resource type, treating as terminal", "jobID", latestProvisionJob.JobID)
+			log.Error(err, "EDA provision job on unsupported resource type, treating as terminal", "jobID", latestProvisionJob.JobID)
 			return true, nil, nil
 		}
 		log.Info("detected EDA provision job (provider switch scenario), checking resource phase", "jobID", latestProvisionJob.JobID, "phase", phase)
