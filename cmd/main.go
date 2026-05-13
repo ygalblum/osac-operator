@@ -387,6 +387,7 @@ func setupComputeInstanceControllers(
 	localMgr := mgr.GetLocalManager()
 	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
 	tenantNamespace := os.Getenv(envTenantNamespace)
+	networkingNamespace := os.Getenv(envNetworkingNamespace)
 	targetCluster := targetClusterFromManager(mgr)
 	computeInstanceProvider, statusPollInterval, err := createProviderFromEnv(
 		envComputeInstanceProvisionWebhook, envComputeInstanceDeprovisionWebhook,
@@ -409,6 +410,7 @@ func setupComputeInstanceControllers(
 		mgr,
 		computeInstanceNamespace,
 		tenantNamespace,
+		networkingNamespace,
 		computeInstanceProvider,
 		statusPollInterval,
 		maxJobHistory,

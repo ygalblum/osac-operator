@@ -40,6 +40,5 @@ var (
 	osacComputeInstanceFinalizer                 string = fmt.Sprintf("%s/computeinstance", osacPrefix)
 	osacComputeInstanceFeedbackFinalizer         string = fmt.Sprintf("%s/computeinstance-feedback", osacPrefix)
 	osacComputeInstanceManagementStateAnnotation string = fmt.Sprintf("%s/management-state", osacPrefix)
-	osacComputeInstancePublicIPAddressAnnotation string = fmt.Sprintf("%s/public-ip-address", osacPrefix)
 	osacSubnetTargetNamespaceAnnotation          string = fmt.Sprintf("%s/subnet-target-namespace", osacPrefix)
 )

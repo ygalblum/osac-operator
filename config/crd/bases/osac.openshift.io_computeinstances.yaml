@@ -35,6 +35,10 @@ spec:
     - jsonPath: .status.ipAddress
       name: IP
       type: string
+    - jsonPath: .status.publicIPAddress
+      name: PublicIP
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -407,6 +411,11 @@ spec:
                 - Stopping
                 - Stopped
                 - Paused
+                type: string
+              publicIPAddress:
+                description: |-
+                  PublicIPAddress is the public IP address attached to this instance via a PublicIP CR.
+                  Populated when a PublicIP CR in state "Attached" references this ComputeInstance.
                 type: string
               tenantReference:
                 description: Reference to the tenant that contains the ComputeInstance

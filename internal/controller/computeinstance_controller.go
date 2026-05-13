@@ -68,6 +68,7 @@ type ComputeInstanceReconciler struct {
 	mgr                      mcmanager.Manager
 	ComputeInstanceNamespace string
 	TenantNamespace          string
+	NetworkingNamespace      string
 	ProvisioningProvider     provisioning.ProvisioningProvider
 	// StatusPollInterval defines how often to check provisioning job status
 	StatusPollInterval time.Duration
@@ -80,6 +81,7 @@ func NewComputeInstanceReconciler(
 	mgr mcmanager.Manager,
 	computeInstanceNamespace string,
 	tenantNamespace string,
+	networkingNamespace string,
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
@@ -108,6 +110,7 @@ func NewComputeInstanceReconciler(
 		mgr:                      mgr,
 		ComputeInstanceNamespace: computeInstanceNamespace,
 		TenantNamespace:          tenantNamespace,
+		NetworkingNamespace:      networkingNamespace,
 		ProvisioningProvider:     provisioningProvider,
 		StatusPollInterval:       statusPollInterval,
 		MaxJobHistory:            maxJobHistory,
@@ -118,6 +121,7 @@ func NewComputeInstanceReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=publicips,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines;virtualmachineinstances,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
@@ -238,6 +242,13 @@ func (r *ComputeInstanceReconciler) SetupWithManager(mgr mcmanager.Manager) erro
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false),
 		).
+		Watches(
+			&v1alpha1.PublicIP{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapPublicIPToComputeInstance),
+			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
 		Complete(r)
 }
 
@@ -315,6 +326,77 @@ func (r *ComputeInstanceReconciler) mapTenantToComputeInstances(ctx context.Cont
 		"computeinstances", computeInstances.Items,
 	)
 	return requests
+}
+
+// mapPublicIPToComputeInstance maps a PublicIP change to the ComputeInstance it references
+// via spec.computeInstance (CI UUID). This triggers a CI reconcile when a PublicIP is
+// attached, detached, or has its address updated.
+func (r *ComputeInstanceReconciler) mapPublicIPToComputeInstance(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := ctrllog.FromContext(ctx)
+
+	publicIP, ok := obj.(*v1alpha1.PublicIP)
+	if !ok {
+		return nil
+	}
+
+	ciUUID := publicIP.Spec.ComputeInstance
+	if ciUUID == "" {
+		return nil
+	}
+
+	ciList := &v1alpha1.ComputeInstanceList{}
+	if err := r.List(ctx, ciList,
+		client.InNamespace(r.ComputeInstanceNamespace),
+		client.MatchingLabels{osacComputeInstanceIDLabel: ciUUID},
+	); err != nil {
+		log.Error(err, "failed to list ComputeInstances for PublicIP watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range ciList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(&ciList.Items[i]),
+		})
+	}
+
+	if len(requests) > 0 {
+		log.Info("mapped PublicIP change to ComputeInstance",
+			"publicIP", publicIP.Name,
+			"computeInstanceUUID", ciUUID,
+		)
+	}
+
+	return requests
+}
+
+// syncPublicIPAddress looks up attached PublicIP CRs and populates status.publicIPAddress.
+func (r *ComputeInstanceReconciler) syncPublicIPAddress(ctx context.Context, instance *v1alpha1.ComputeInstance) {
+	log := ctrllog.FromContext(ctx)
+
+	ciUUID, ok := instance.Labels[osacComputeInstanceIDLabel]
+	if !ok {
+		instance.SetPublicIPAddress("")
+		return
+	}
+
+	publicIPs := &v1alpha1.PublicIPList{}
+	if err := r.List(ctx, publicIPs, client.InNamespace(r.NetworkingNamespace)); err != nil {
+		log.Error(err, "failed to list PublicIPs for public IP address sync")
+		return
+	}
+
+	for i := range publicIPs.Items {
+		pip := &publicIPs.Items[i]
+		if pip.Spec.ComputeInstance == ciUUID &&
+			pip.Status.State == v1alpha1.PublicIPStateAttached &&
+			pip.Status.Address != "" {
+			instance.SetPublicIPAddress(pip.Status.Address)
+			return
+		}
+	}
+
+	instance.SetPublicIPAddress("")
 }
 
 // handleProvisioning manages the provisioning job lifecycle for a ComputeInstance.
@@ -707,6 +789,8 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	if len(tenant.Status.StorageClasses) > 0 {
 		ctx = provisioning.WithTenantStorageClasses(ctx, tenant.Status.StorageClasses)
 	}
+
+	r.syncPublicIPAddress(ctx, instance)
 
 	// Always delegate to provisioning lifecycle — EvaluateAction decides
 	// whether to skip, poll, or trigger. This avoids the A-B-A problem where

@@ -298,6 +298,11 @@ type ComputeInstanceStatus struct {
 	// Populated when the instance is ready (phase Running).
 	// +kubebuilder:validation:Optional
 	IPAddress string `json:"ipAddress,omitempty"`
+
+	// PublicIPAddress is the public IP address attached to this instance via a PublicIP CR.
+	// Populated when a PublicIP CR in state "Attached" references this ComputeInstance.
+	// +kubebuilder:validation:Optional
+	PublicIPAddress string `json:"publicIPAddress,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -309,6 +314,7 @@ type ComputeInstanceStatus struct {
 // +kubebuilder:printcolumn:name="RunStrategy",type=string,JSONPath=`.spec.runStrategy`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.ipAddress`
+// +kubebuilder:printcolumn:name="PublicIP",type=string,JSONPath=`.status.publicIPAddress`,priority=1
 
 // ComputeInstance is the Schema for the computeinstances API
 type ComputeInstance struct {
