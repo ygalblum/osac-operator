@@ -28,10 +28,10 @@ import (
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
-var _ = Describe("consoleURLFromConfig", func() {
+var _ = Describe("kubevirtSubresourceURL", func() {
 	DescribeTable("builds the correct WebSocket URL",
-		func(host, namespace, vmName, wantURL, wantErr string) {
-			u, err := consoleURLFromConfig(&rest.Config{Host: host}, namespace, vmName)
+		func(host, namespace, vmName, subresource, wantURL, wantErr string) {
+			u, err := kubevirtSubresourceURL(&rest.Config{Host: host}, namespace, vmName, subresource)
 
 			if wantErr != "" {
 				Expect(err).To(MatchError(wantErr))
@@ -41,22 +41,26 @@ var _ = Describe("consoleURLFromConfig", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(u.String()).To(Equal(wantURL))
 		},
-		Entry("preserves API path prefix",
-			"https://gateway.example/cluster-a", "tenant-a", "vm-a",
+		Entry("console preserves API path prefix",
+			"https://gateway.example/cluster-a", "tenant-a", "vm-a", "console",
 			"wss://gateway.example/cluster-a/apis/subresources.kubevirt.io/v1/namespaces/tenant-a/virtualmachineinstances/vm-a/console",
 			""),
+		Entry("vnc preserves API path prefix",
+			"https://gateway.example/cluster-a", "tenant-a", "vm-a", "vnc",
+			"wss://gateway.example/cluster-a/apis/subresources.kubevirt.io/v1/namespaces/tenant-a/virtualmachineinstances/vm-a/vnc",
+			""),
 		Entry("converts http to ws",
-			"http://gateway.example/base/", "tenant-a", "vm-a",
+			"http://gateway.example/base/", "tenant-a", "vm-a", "console",
 			"ws://gateway.example/base/apis/subresources.kubevirt.io/v1/namespaces/tenant-a/virtualmachineinstances/vm-a/console",
 			""),
 		Entry("rejects missing scheme",
-			"gateway.example/cluster-a", "tenant-a", "vm-a",
+			"gateway.example/cluster-a", "tenant-a", "vm-a", "console",
 			"",
 			`unsupported remote host protocol ""`),
 	)
 })
 
-var _ = Describe("handleConsole", func() {
+var _ = Describe("handleSubresource", func() {
 	Context("error cases", func() {
 		DescribeTable("returns the expected status code",
 			func(objects []client.Object, makeResolver func() (ConfigResolver, func()), wantCode int) {
@@ -69,7 +73,7 @@ var _ = Describe("handleConsole", func() {
 				req.SetPathValue("name", "vm-a")
 
 				rec := httptest.NewRecorder()
-				server.handleConsole(rec, req)
+				server.handleSubresource(rec, req, "console")
 
 				Expect(rec.Code).To(Equal(wantCode))
 			},
@@ -124,36 +128,40 @@ var _ = Describe("handleConsole", func() {
 		)
 	})
 
-	It("proxies WebSocket messages successfully", func() {
-		echoServer, echoCfg := startWSEchoServer()
-		DeferCleanup(echoServer.Close)
+	DescribeTable("proxies WebSocket messages successfully",
+		func(subresource string) {
+			echoServer, echoCfg := startWSEchoServer()
+			DeferCleanup(echoServer.Close)
 
-		ci := newComputeInstance("tenant-a", "vm-a", "test-ns", "test-vm")
-		server := newTestServer([]client.Object{ci}, fakeConfigResolver{config: echoCfg, source: "test"})
+			ci := newComputeInstance("tenant-a", "vm-a", "test-ns", "test-vm")
+			server := newTestServer([]client.Object{ci}, fakeConfigResolver{config: echoCfg, source: "test"})
 
-		httpServer := httptest.NewServer(server.newAPIMux())
-		DeferCleanup(httpServer.Close)
+			httpServer := httptest.NewServer(server.newAPIMux())
+			DeferCleanup(httpServer.Close)
 
-		consoleURL := strings.Replace(httpServer.URL, "http://", "ws://", 1) +
-			"/apis/" + apiGroup + "/" + apiVersion + "/namespaces/tenant-a/computeinstances/vm-a/console"
+			wsURL := strings.Replace(httpServer.URL, "http://", "ws://", 1) +
+				"/apis/" + apiGroup + "/" + apiVersion + "/namespaces/tenant-a/computeinstances/vm-a/" + subresource
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		DeferCleanup(cancel)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			DeferCleanup(cancel)
 
-		conn, _, err := websocket.Dial(ctx, consoleURL, nil)
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { _ = conn.CloseNow() })
+			conn, _, err := websocket.Dial(ctx, wsURL, nil)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { _ = conn.CloseNow() })
 
-		testMessage := []byte("hello console")
-		Expect(conn.Write(ctx, websocket.MessageBinary, testMessage)).To(Succeed())
+			testMessage := []byte("hello " + subresource)
+			Expect(conn.Write(ctx, websocket.MessageBinary, testMessage)).To(Succeed())
 
-		msgType, data, err := conn.Read(ctx)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(msgType).To(Equal(websocket.MessageBinary))
-		Expect(string(data)).To(Equal(string(testMessage)))
+			msgType, data, err := conn.Read(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(msgType).To(Equal(websocket.MessageBinary))
+			Expect(string(data)).To(Equal(string(testMessage)))
 
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-	})
+			_ = conn.Close(websocket.StatusNormalClosure, "")
+		},
+		Entry("console", "console"),
+		Entry("vnc", "vnc"),
+	)
 })
 
 var _ = Describe("resolveVMReference", func() {
@@ -263,14 +271,14 @@ var _ = Describe("forwardUpstreamResponse", func() {
 	)
 })
 
-var _ = Describe("newConsoleConnectStatusError", func() {
+var _ = Describe("newConnectStatusError", func() {
 	It("returns upstream error when response is non-nil", func() {
 		resp := &http.Response{
 			StatusCode: http.StatusConflict,
 			Status:     "409 Conflict",
 		}
 
-		err := newConsoleConnectStatusError(errors.New("dial failed"), resp)
+		err := newConnectStatusError(errors.New("dial failed"), resp)
 
 		var ue *upstreamError
 		Expect(errors.As(err, &ue)).To(BeTrue())
@@ -278,12 +286,12 @@ var _ = Describe("newConsoleConnectStatusError", func() {
 	})
 
 	It("returns service unavailable when response is nil", func() {
-		err := newConsoleConnectStatusError(errors.New("dial failed"), nil)
+		err := newConnectStatusError(errors.New("dial failed"), nil)
 		Expect(apierrors.IsServiceUnavailable(err)).To(BeTrue())
 	})
 })
 
-var _ = Describe("dialConsole", func() {
+var _ = Describe("dialSubresource", func() {
 	DescribeTable("handles connection scenarios",
 		func(setup func() (*rest.Config, func()), wantErr bool) {
 			cfg, cleanup := setup()
@@ -293,7 +301,7 @@ var _ = Describe("dialConsole", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			DeferCleanup(cancel)
 
-			conn, err := server.dialConsole(ctx, cfg, "test-ns", "test-vm")
+			conn, err := server.dialSubresource(ctx, cfg, "test-ns", "test-vm", "console")
 			if wantErr {
 				Expect(err).To(HaveOccurred())
 				return

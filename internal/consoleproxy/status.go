@@ -14,15 +14,15 @@ import (
 )
 
 var (
-	consoleGroupVersion = schema.GroupVersion{Group: apiGroup, Version: apiVersion}
-	computeInstanceGR   = schema.GroupResource{Group: apiGroup, Resource: "computeinstances"}
+	proxyGroupVersion = schema.GroupVersion{Group: apiGroup, Version: apiVersion}
+	computeInstanceGR = schema.GroupResource{Group: apiGroup, Resource: "computeinstances"}
 )
 
-func writeConsoleError(w http.ResponseWriter, r *http.Request, err error) {
-	responsewriters.ErrorNegotiated(err, scheme.Codecs, consoleGroupVersion, w, r)
+func writeError(w http.ResponseWriter, r *http.Request, err error) {
+	responsewriters.ErrorNegotiated(err, scheme.Codecs, proxyGroupVersion, w, r)
 }
 
-func writeConsoleObject(w http.ResponseWriter, r *http.Request, statusCode int, obj runtime.Object) {
+func writeObject(w http.ResponseWriter, r *http.Request, statusCode int, obj runtime.Object) {
 	responsewriters.WriteObjectNegotiated(
 		scheme.Codecs,
 		negotiation.DefaultEndpointRestrictions,
@@ -50,14 +50,14 @@ func newVMReferenceStatusError(name, message string) error {
 	return apierrors.NewServiceUnavailable(fmt.Sprintf("compute instance %q: %s", name, message))
 }
 
-func newConsoleConnectStatusError(dialErr error, resp *http.Response) error {
+func newConnectStatusError(dialErr error, resp *http.Response) error {
 	if resp != nil {
 		return &upstreamError{resp: resp}
 	}
-	return apierrors.NewServiceUnavailable(fmt.Sprintf("failed to connect to VM console: %v", dialErr))
+	return apierrors.NewServiceUnavailable(fmt.Sprintf("failed to connect to VM: %v", dialErr))
 }
 
-func newConsoleConfigStatusError(message string, err error) error {
+func newConfigStatusError(message string, err error) error {
 	return apierrors.NewServiceUnavailable(fmt.Sprintf("%s: %v", message, err))
 }
 

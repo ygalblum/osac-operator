@@ -49,17 +49,26 @@ var _ = Describe("API Discovery", func() {
 		req := httptest.NewRequest(http.MethodGet, "/apis/"+apiGroup+"/"+apiVersion, nil)
 		req.Header.Set("Accept", "application/json")
 
-		handleAPIResourceList(rec, req)
+		handleAPIResourceList([]metav1.APIResource{
+			{Name: "computeinstances/console", Kind: "ComputeInstance", Namespaced: true, Verbs: metav1.Verbs{"get"}},
+			{Name: "computeinstances/vnc", Kind: "ComputeInstance", Namespaced: true, Verbs: metav1.Verbs{"get"}},
+		})(rec, req)
 
 		Expect(rec.Code).To(Equal(http.StatusOK))
 
 		var list metav1.APIResourceList
 		Expect(json.Unmarshal(rec.Body.Bytes(), &list)).To(Succeed())
 		Expect(list.GroupVersion).To(Equal(apiGroup + "/" + apiVersion))
-		Expect(list.APIResources).To(HaveLen(1))
+		Expect(list.APIResources).To(HaveLen(2))
+
 		Expect(list.APIResources[0].Name).To(Equal("computeinstances/console"))
 		Expect(list.APIResources[0].Kind).To(Equal("ComputeInstance"))
 		Expect(list.APIResources[0].Namespaced).To(BeTrue())
 		Expect(list.APIResources[0].Verbs).To(Equal(metav1.Verbs{"get"}))
+
+		Expect(list.APIResources[1].Name).To(Equal("computeinstances/vnc"))
+		Expect(list.APIResources[1].Kind).To(Equal("ComputeInstance"))
+		Expect(list.APIResources[1].Namespaced).To(BeTrue())
+		Expect(list.APIResources[1].Verbs).To(Equal(metav1.Verbs{"get"}))
 	})
 })

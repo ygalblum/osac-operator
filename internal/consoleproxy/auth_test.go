@@ -14,7 +14,10 @@ import (
 	genericrequest "k8s.io/apiserver/pkg/endpoints/request"
 )
 
-const consolePath = "/apis/console.osac.openshift.io/v1alpha1/namespaces/my-ns/computeinstances/my-ci/console"
+const (
+	consolePath = "/apis/console.osac.openshift.io/v1alpha1/namespaces/my-ns/computeinstances/my-ci/console"
+	vncPath     = "/apis/console.osac.openshift.io/v1alpha1/namespaces/my-ns/computeinstances/my-ci/vnc"
+)
 
 func allowAllAuthn() authenticator.Request {
 	return authenticator.RequestFunc(func(_ *http.Request) (*authenticator.Response, bool, error) {
@@ -112,18 +115,22 @@ var _ = Describe("wrapWithAuthFilters", func() {
 			Expect(captured).NotTo(BeNil())
 		}
 
-		It("parses console subresource as resource request", func() {
-			captureAttributes(consolePath)
+		DescribeTable("parses subresource requests",
+			func(path, wantSubresource string) {
+				captureAttributes(path)
 
-			Expect(captured.IsResourceRequest()).To(BeTrue())
-			Expect(captured.GetAPIGroup()).To(Equal("console.osac.openshift.io"))
-			Expect(captured.GetAPIVersion()).To(Equal("v1alpha1"))
-			Expect(captured.GetResource()).To(Equal("computeinstances"))
-			Expect(captured.GetSubresource()).To(Equal("console"))
-			Expect(captured.GetNamespace()).To(Equal("my-ns"))
-			Expect(captured.GetName()).To(Equal("my-ci"))
-			Expect(captured.GetVerb()).To(Equal("get"))
-		})
+				Expect(captured.IsResourceRequest()).To(BeTrue())
+				Expect(captured.GetAPIGroup()).To(Equal("console.osac.openshift.io"))
+				Expect(captured.GetAPIVersion()).To(Equal("v1alpha1"))
+				Expect(captured.GetResource()).To(Equal("computeinstances"))
+				Expect(captured.GetSubresource()).To(Equal(wantSubresource))
+				Expect(captured.GetNamespace()).To(Equal("my-ns"))
+				Expect(captured.GetName()).To(Equal("my-ci"))
+				Expect(captured.GetVerb()).To(Equal("get"))
+			},
+			Entry("console", consolePath, "console"),
+			Entry("vnc", vncPath, "vnc"),
+		)
 
 		DescribeTable("parses non-resource paths",
 			func(path string) {

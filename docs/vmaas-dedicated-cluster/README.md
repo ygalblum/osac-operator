@@ -19,7 +19,7 @@ cluster are managed by different personas.
 | ComputeInstance controller | reconciles ComputeInstance CRs | watch KubeVirt VirtualMachine/VirtualMachineInstance |
 | Tenant controller | reconciles Tenant CRs | manage Tenant namespace, UDN resources |
 | AAP | executes playbooks | manage KubeVirt VirtualMachine/VirtualMachineInstance |
-| Console Proxy | -- | connects to KubeVirt console subresource via WebSocket |
+| Console Proxy | -- | connects to KubeVirt VM subresources (console, VNC) via WebSocket |
 
 All OSAC custom resources remain on the management cluster. The
 `ComputeInstance` and `Tenant` controllers watch the downstream Kubernetes

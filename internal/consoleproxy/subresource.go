@@ -20,21 +20,22 @@ import (
 
 const upstreamDialTimeout = 30 * time.Second
 
-func (s *Server) handleConsole(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSubresource(w http.ResponseWriter, r *http.Request, subresource string) {
 	ctx := r.Context()
 	namespace := r.PathValue("namespace")
 	name := r.PathValue("name")
 
 	vmClusterConfig, configSource, err := s.configResolver.ResolveConfig(ctx, namespace)
 	if err != nil {
-		s.writeConsoleFailure(ctx, w, r, "Failed to resolve VM cluster config",
+		s.writeFailure(ctx, w, r, "Failed to resolve VM cluster config",
 			newResolveConfigStatusError(err),
 			slog.String("namespace", namespace),
 		)
 		return
 	}
 
-	s.logger.InfoContext(ctx, "Console request",
+	s.logger.InfoContext(ctx, "Subresource request",
+		slog.String("subresource", subresource),
 		slog.String("namespace", namespace),
 		slog.String("name", name),
 		slog.String("configSource", configSource),
@@ -42,7 +43,7 @@ func (s *Server) handleConsole(w http.ResponseWriter, r *http.Request) {
 
 	vmNamespace, vmName, err := s.resolveVMReference(ctx, namespace, name)
 	if err != nil {
-		s.writeConsoleFailure(ctx, w, r, "Failed to resolve VM reference",
+		s.writeFailure(ctx, w, r, "Failed to resolve VM reference",
 			err,
 			slog.String("name", name),
 		)
@@ -52,11 +53,12 @@ func (s *Server) handleConsole(w http.ResponseWriter, r *http.Request) {
 	dialCtx, dialCancel := context.WithTimeout(ctx, upstreamDialTimeout)
 	defer dialCancel()
 
-	upstreamWS, err := s.dialConsole(dialCtx, vmClusterConfig, vmNamespace, vmName)
+	upstreamWS, err := s.dialSubresource(dialCtx, vmClusterConfig, vmNamespace, vmName, subresource)
 	if err != nil {
 		var ue *upstreamError
 		if errors.As(err, &ue) {
-			s.logger.ErrorContext(ctx, "Upstream console error",
+			s.logger.ErrorContext(ctx, "Upstream error",
+				slog.String("subresource", subresource),
 				slog.String("vm", vmName),
 				slog.String("status", ue.resp.Status),
 				slog.String("configSource", configSource),
@@ -68,7 +70,7 @@ func (s *Server) handleConsole(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		s.writeConsoleFailure(ctx, w, r, "Failed to connect to VM console",
+		s.writeFailure(ctx, w, r, "Failed to connect to VM "+subresource,
 			err,
 			slog.String("vm", vmName),
 			slog.String("configSource", configSource),
@@ -111,14 +113,16 @@ func (s *Server) handleConsole(w http.ResponseWriter, r *http.Request) {
 	cancel()
 
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
-		s.logger.WarnContext(ctx, "Console stream error",
+		s.logger.WarnContext(ctx, "Stream error",
+			slog.String("subresource", subresource),
 			slog.String("namespace", namespace),
 			slog.String("name", name),
 			slog.String("error", err.Error()),
 		)
 	}
 
-	s.logger.InfoContext(ctx, "Console session ended",
+	s.logger.InfoContext(ctx, "Session ended",
+		slog.String("subresource", subresource),
 		slog.String("namespace", namespace),
 		slog.String("name", name),
 	)
@@ -141,27 +145,27 @@ func (s *Server) resolveVMReference(ctx context.Context, namespace, name string)
 	return ref.Namespace, ref.KubeVirtVirtualMachineName, nil
 }
 
-func (s *Server) dialConsole(ctx context.Context, remoteConfig *rest.Config, namespace, vmName string) (*websocket.Conn, error) {
-	consoleURL, err := consoleURLFromConfig(remoteConfig, namespace, vmName)
+func (s *Server) dialSubresource(ctx context.Context, remoteConfig *rest.Config, namespace, vmName, subresource string) (*websocket.Conn, error) {
+	subresourceURL, err := kubevirtSubresourceURL(remoteConfig, namespace, vmName, subresource)
 	if err != nil {
-		return nil, newConsoleConfigStatusError("failed to build VM console URL", err)
+		return nil, newConfigStatusError("failed to build VM subresource URL", err)
 	}
 
 	rt, err := rest.TransportFor(remoteConfig)
 	if err != nil {
-		return nil, newConsoleConfigStatusError("failed to create upstream transport", err)
+		return nil, newConfigStatusError("failed to create upstream transport", err)
 	}
 
-	conn, resp, err := websocket.Dial(ctx, consoleURL.String(), &websocket.DialOptions{
+	conn, resp, err := websocket.Dial(ctx, subresourceURL.String(), &websocket.DialOptions{
 		HTTPClient: &http.Client{Transport: rt},
 	})
 	if err != nil {
-		return nil, newConsoleConnectStatusError(err, resp)
+		return nil, newConnectStatusError(err, resp)
 	}
 	return conn, nil
 }
 
-func (s *Server) writeConsoleFailure(
+func (s *Server) writeFailure(
 	ctx context.Context,
 	w http.ResponseWriter,
 	r *http.Request,
@@ -171,10 +175,10 @@ func (s *Server) writeConsoleFailure(
 ) {
 	logAttrs := append(attrs, slog.String("error", err.Error()))
 	s.logger.ErrorContext(ctx, message, logAttrs...)
-	writeConsoleError(w, r, err)
+	writeError(w, r, err)
 }
 
-func consoleURLFromConfig(remoteConfig *rest.Config, namespace, vmName string) (*url.URL, error) {
+func kubevirtSubresourceURL(remoteConfig *rest.Config, namespace, vmName, subresource string) (*url.URL, error) {
 	u, err := url.Parse(remoteConfig.Host)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse remote host: %w", err)
@@ -190,10 +194,11 @@ func consoleURLFromConfig(remoteConfig *rest.Config, namespace, vmName string) (
 	}
 
 	u = u.JoinPath(fmt.Sprintf(
-		"apis/subresources.kubevirt.io/%s/namespaces/%s/virtualmachineinstances/%s/console",
+		"apis/subresources.kubevirt.io/%s/namespaces/%s/virtualmachineinstances/%s/%s",
 		kubevirtv1.ApiStorageVersion,
 		namespace,
 		vmName,
+		subresource,
 	))
 	return u, nil
 }

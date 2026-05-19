@@ -58,14 +58,18 @@ var _ = Describe("API Mux", func() {
 			http.StatusMethodNotAllowed, ""),
 	)
 
-	It("routes console path to handler", func() {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet,
-			"/apis/"+apiGroup+"/"+apiVersion+"/namespaces/ns/computeinstances/ci/console", nil)
-		req.Header.Set("Accept", "application/json")
+	DescribeTable("routes subresource paths to handler",
+		func(subresource string) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet,
+				"/apis/"+apiGroup+"/"+apiVersion+"/namespaces/ns/computeinstances/ci/"+subresource, nil)
+			req.Header.Set("Accept", "application/json")
 
-		mux.ServeHTTP(rec, req)
+			mux.ServeHTTP(rec, req)
 
-		Expect(rec.Code).NotTo(Equal(http.StatusNotFound))
-	})
+			Expect(rec.Code).NotTo(Equal(http.StatusNotFound))
+		},
+		Entry("console", "console"),
+		Entry("vnc", "vnc"),
+	)
 })

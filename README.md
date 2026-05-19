@@ -124,13 +124,15 @@ example.
 ## Console Proxy
 
 The console proxy (`cmd/console-proxy/`) is an HTTPS/WebSocket server that
-gives clients access to KubeVirt VM serial consoles through the OSAC API. It
-registers itself as a Kubernetes
+gives clients access to KubeVirt VM subresources (serial console, VNC) through
+the OSAC API. It registers itself as a Kubernetes
 [aggregated API server](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/apiserver-aggregation/)
-under `console.osac.openshift.io/v1alpha1` and exposes a single subresource:
+under `console.osac.openshift.io/v1alpha1` and exposes ComputeInstance
+subresources:
 
 ```text
 GET /apis/console.osac.openshift.io/v1alpha1/namespaces/{ns}/computeinstances/{name}/console
+GET /apis/console.osac.openshift.io/v1alpha1/namespaces/{ns}/computeinstances/{name}/vnc
 ```
 
 ### Request flow
@@ -145,7 +147,7 @@ Fulfillment Service  (Console gRPC server, session manager)
 Console Proxy  (aggregated API on the hub cluster)
   |  WebSocket (binary)
   v
-KubeVirt  (VirtualMachineInstance console subresource)
+KubeVirt  (VirtualMachineInstance console/VNC subresource)
 ```
 
 On each request the proxy:
@@ -153,8 +155,8 @@ On each request the proxy:
 1. Looks up the OSAC `ComputeInstance` CR to find the backing KubeVirt VM name
    and namespace.
 2. Resolves the kubeconfig for the cluster where the VM runs (see modes below).
-3. Dials the upstream KubeVirt console WebSocket at
-   `subresources.kubevirt.io/v1/namespaces/{vmNS}/virtualmachineinstances/{vmName}/console`.
+3. Dials the upstream KubeVirt WebSocket at
+   `subresources.kubevirt.io/v1/namespaces/{vmNS}/virtualmachineinstances/{vmName}/{subresource}`.
 4. Accepts the client WebSocket upgrade and proxies binary data bidirectionally
    with `io.Copy`.
 
@@ -208,7 +210,7 @@ cmd/console-proxy/main.go          # Entry point, CLI flags
 internal/consoleproxy/
   server.go                        # HTTPS + health probe servers, routing
   auth.go                          # Delegated authn/authz
-  console.go                       # WebSocket proxy handler
+  subresource.go                   # WebSocket proxy handlers (console, VNC)
   config_resolver.go               # VM cluster kubeconfig resolution
   discovery.go                     # Kubernetes API discovery endpoints
   status.go                        # Error-to-Kubernetes-Status mapping

@@ -128,15 +128,22 @@ spec:
 		output, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(output)).To(ContainSubstring("computeinstances/console"))
+		Expect(string(output)).To(ContainSubstring("computeinstances/vnc"))
 	})
 
-	It("should return an error for a nonexistent compute instance", func() {
-		cmd := exec.Command("kubectl", "get", "--raw",
-			"/apis/console.osac.openshift.io/v1alpha1/namespaces/default/computeinstances/nonexistent/console",
-		)
-		_, err := utils.Run(cmd)
-		Expect(err).To(HaveOccurred())
-	})
+	DescribeTable("should return an error for a nonexistent compute instance",
+		func(subresource string) {
+			path := fmt.Sprintf(
+				"/apis/console.osac.openshift.io/v1alpha1/namespaces/default/computeinstances/nonexistent/%s",
+				subresource,
+			)
+			cmd := exec.Command("kubectl", "get", "--raw", path)
+			_, err := utils.Run(cmd)
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("console", "console"),
+		Entry("vnc", "vnc"),
+	)
 
 	It("should return an error for a compute instance without VM reference", func() {
 		By("creating a ComputeInstance without a VM reference")
@@ -148,6 +155,14 @@ spec:
 		By("attempting console access")
 		cmd = exec.Command("kubectl", "get", "--raw",
 			fmt.Sprintf("/apis/console.osac.openshift.io/v1alpha1/namespaces/%s/computeinstances/test-ci-no-vm/console",
+				consoleProxyNamespace),
+		)
+		_, err = utils.Run(cmd)
+		Expect(err).To(HaveOccurred())
+
+		By("attempting VNC access")
+		cmd = exec.Command("kubectl", "get", "--raw",
+			fmt.Sprintf("/apis/console.osac.openshift.io/v1alpha1/namespaces/%s/computeinstances/test-ci-no-vm/vnc",
 				consoleProxyNamespace),
 		)
 		_, err = utils.Run(cmd)

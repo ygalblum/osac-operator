@@ -1,5 +1,5 @@
 // Package consoleproxy implements a WebSocket proxy server that exposes
-// KubeVirt VM console access through OSAC ComputeInstance resources.
+// KubeVirt VM subresource access (console, VNC) through OSAC ComputeInstance resources.
 package consoleproxy
 
 import (
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -22,6 +23,8 @@ const (
 	apiGroup   = "console.osac.openshift.io"
 	apiVersion = "v1alpha1"
 )
+
+var subresources = []string{"console", "vnc"}
 
 type Config struct {
 	Logger                 *slog.Logger
@@ -162,8 +165,24 @@ func (s *Server) newAPIMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /apis", handleAPIGroupList)
 	mux.HandleFunc("GET /apis/"+apiGroup, handleAPIGroup)
-	mux.HandleFunc("GET /apis/"+apiGroup+"/"+apiVersion, handleAPIResourceList)
-	mux.HandleFunc("GET /apis/"+apiGroup+"/"+apiVersion+"/namespaces/{namespace}/computeinstances/{name}/console", s.handleConsole)
+
+	apiResources := make([]metav1.APIResource, 0, len(subresources))
+	for _, sub := range subresources {
+		apiResources = append(apiResources, metav1.APIResource{
+			Name:       "computeinstances/" + sub,
+			Kind:       "ComputeInstance",
+			Namespaced: true,
+			Verbs:      metav1.Verbs{"get"},
+		})
+		mux.HandleFunc(
+			"GET /apis/"+apiGroup+"/"+apiVersion+"/namespaces/{namespace}/computeinstances/{name}/"+sub,
+			func(w http.ResponseWriter, r *http.Request) {
+				s.handleSubresource(w, r, sub)
+			},
+		)
+	}
+	mux.HandleFunc("GET /apis/"+apiGroup+"/"+apiVersion, handleAPIResourceList(apiResources))
+
 	return mux
 }
 
