@@ -1298,6 +1298,29 @@ var _ = Describe("ComputeInstance Controller", func() {
 		)
 	})
 
+	Context("isOperationalStatus", func() {
+		DescribeTable("returns true for known operational statuses and false otherwise",
+			func(status kubevirtv1.VirtualMachinePrintableStatus, expected bool) {
+				Expect(isOperationalStatus(status)).To(Equal(expected))
+			},
+			Entry("Running", kubevirtv1.VirtualMachineStatusRunning, true),
+			Entry("Stopped", kubevirtv1.VirtualMachineStatusStopped, true),
+			Entry("Paused", kubevirtv1.VirtualMachineStatusPaused, true),
+			Entry("Starting", kubevirtv1.VirtualMachineStatusStarting, true),
+			Entry("WaitingForVolumeBinding", kubevirtv1.VirtualMachineStatusWaitingForVolumeBinding, true),
+			Entry("Migrating", kubevirtv1.VirtualMachineStatusMigrating, true),
+			Entry("WaitingForReceiver", kubevirtv1.VirtualMachineStatusWaitingForReceiver, true),
+			Entry("Stopping", kubevirtv1.VirtualMachineStatusStopping, true),
+			Entry("Unknown", kubevirtv1.VirtualMachineStatusUnknown, true),
+			Entry("Provisioning is not operational", kubevirtv1.VirtualMachineStatusProvisioning, false),
+			Entry("DataVolumeError is not operational", kubevirtv1.VirtualMachineStatusDataVolumeError, false),
+			Entry("CrashLoopBackOff is not operational", kubevirtv1.VirtualMachineStatusCrashLoopBackOff, false),
+			Entry("Terminating is not operational", kubevirtv1.VirtualMachineStatusTerminating, false),
+			Entry("empty string is not operational", kubevirtv1.VirtualMachinePrintableStatus(""), false),
+			Entry("unknown future status is not operational", kubevirtv1.VirtualMachinePrintableStatus("SomeFutureStatus"), false),
+		)
+	})
+
 	Context("handleKubeVirtVM", func() {
 		var (
 			ctx          context.Context
@@ -1447,6 +1470,20 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonProvisioningFailed))
 			Expect(provCond.Message).To(ContainSubstring("VM scheduling failed"))
+		})
+
+		It("sets Provisioned=False for unknown PrintableStatus", func() {
+			kv := &kubevirtv1.VirtualMachine{
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachinePrintableStatus("SomeFutureErrorStatus"),
+				},
+			}
+			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+
+			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonProvisioningFailed))
+			Expect(provCond.Message).To(Equal("VM entered unexpected status: SomeFutureErrorStatus"))
 		})
 	})
 

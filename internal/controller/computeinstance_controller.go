@@ -818,9 +818,10 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, target
 
 	// Provisioned reflects whether compute AND storage resources are allocated.
 	// While PrintableStatus="Provisioning", KubeVirt is still creating DataVolumes
-	// (storage not yet ready). Error states (DataVolumeError, ErrorPvcNotFound, etc.)
-	// indicate provisioning failure. For all other states the VM CR exists and both
-	// compute and storage are allocated or in an operational state.
+	// (storage not yet ready). Known error states (DataVolumeError, ErrorPvcNotFound,
+	// etc.) indicate provisioning failure. Known operational states (Running, Stopped,
+	// etc.) indicate success. Unknown/new statuses default to error to avoid falsely
+	// claiming success.
 	oldProvisionedReason := conditionReason(instance, v1alpha1.ComputeInstanceConditionProvisioned)
 	if kv.Status.PrintableStatus == kubevirtv1.VirtualMachineStatusProvisioning {
 		msg := fmt.Sprintf("Creating DataVolumes for boot disk (%dGiB)", instance.Spec.BootDisk.SizeGiB)
@@ -836,10 +837,16 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, target
 		if oldProvisionedReason != v1alpha1.ReasonProvisioningFailed {
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonProvisioningFailed, eventActionReconcile, "%s", msg)
 		}
-	} else {
+	} else if isOperationalStatus(kv.Status.PrintableStatus) {
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionTrue, "All infrastructure resources provisioned successfully", v1alpha1.ReasonInfrastructureReady)
 		if oldProvisionedReason != v1alpha1.ReasonInfrastructureReady {
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonInfrastructureReady, eventActionReconcile, "All infrastructure resources provisioned successfully")
+		}
+	} else {
+		msg := fmt.Sprintf("VM entered unexpected status: %s", kv.Status.PrintableStatus)
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, msg, v1alpha1.ReasonProvisioningFailed)
+		if oldProvisionedReason != v1alpha1.ReasonProvisioningFailed {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonProvisioningFailed, eventActionReconcile, "%s", msg)
 		}
 	}
 
@@ -943,6 +950,27 @@ func provisioningErrorMessage(kv *kubevirtv1.VirtualMachine) string {
 		return fmt.Sprintf("%s: %s", prefix, detail)
 	}
 	return prefix
+}
+
+// isOperationalStatus returns true when the PrintableStatus represents a known
+// operational (non-error) state where compute and storage resources are allocated.
+// Unknown or new statuses return false so they don't silently claim success —
+// mirroring the defensive posture of determinePhaseFromPrintableStatus.
+func isOperationalStatus(status kubevirtv1.VirtualMachinePrintableStatus) bool {
+	switch status {
+	case kubevirtv1.VirtualMachineStatusRunning,
+		kubevirtv1.VirtualMachineStatusStopped,
+		kubevirtv1.VirtualMachineStatusPaused,
+		kubevirtv1.VirtualMachineStatusStarting,
+		kubevirtv1.VirtualMachineStatusWaitingForVolumeBinding,
+		kubevirtv1.VirtualMachineStatusMigrating,
+		kubevirtv1.VirtualMachineStatusWaitingForReceiver,
+		kubevirtv1.VirtualMachineStatusStopping,
+		kubevirtv1.VirtualMachineStatusUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 // determinePhaseFromPrintableStatus maps a KubeVirt VirtualMachine's PrintableStatus
