@@ -18,6 +18,5 @@ import (
 )
 
 var (
-	osacPublicIPAttachmentIDLabel           string = fmt.Sprintf("%s/publicipattachment-uuid", osacPrefix)
-	osacPublicIPAttachmentFeedbackFinalizer string = fmt.Sprintf("%s/publicipattachment-feedback", osacPrefix)
+	osacPublicIPNameAnnotation string = fmt.Sprintf("%s/publicip-name", osacPrefix)
 )

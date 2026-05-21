@@ -21,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -159,15 +158,19 @@ func (r *PublicIPAttachmentReconciler) handleUpdate(ctx context.Context, attachm
 		attachment.Status.Phase = v1alpha1.PublicIPAttachmentPhaseProgressing
 	}
 
-	// Resolve parent PublicIP by name
-	publicIP := &v1alpha1.PublicIP{}
-	if err := r.Get(ctx, types.NamespacedName{Name: attachment.Spec.PublicIP, Namespace: attachment.Namespace}, publicIP); err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			log.Info("parent PublicIP not found, requeueing", "publicIP", attachment.Spec.PublicIP)
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-		}
+	// Resolve parent PublicIP by UUID label (spec.publicIP contains the fulfillment-service UUID)
+	publicIPList := &v1alpha1.PublicIPList{}
+	if err := r.List(ctx, publicIPList,
+		client.InNamespace(attachment.Namespace),
+		client.MatchingLabels{osacPublicIPIDLabel: attachment.Spec.PublicIP},
+	); err != nil {
 		return ctrl.Result{}, err
 	}
+	if len(publicIPList.Items) == 0 {
+		log.Info("parent PublicIP not found, requeueing", "publicIPUUID", attachment.Spec.PublicIP)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	publicIP := &publicIPList.Items[0]
 
 	// Resolve parent PublicIPPool by UUID label
 	poolList := &v1alpha1.PublicIPPoolList{}
@@ -189,44 +192,9 @@ func (r *PublicIPAttachmentReconciler) handleUpdate(ctx context.Context, attachm
 	}
 
 	// Resolve target ComputeInstance
-	var ci *v1alpha1.ComputeInstance
-	if attachment.Spec.ComputeInstance != nil {
-		ci = &v1alpha1.ComputeInstance{}
-		if err := r.Get(ctx, types.NamespacedName{
-			Name:      *attachment.Spec.ComputeInstance,
-			Namespace: r.ComputeInstanceNamespace,
-		}, ci); err != nil {
-			if client.IgnoreNotFound(err) == nil {
-				log.Info("ComputeInstance not found, requeueing", "computeInstance", *attachment.Spec.ComputeInstance)
-				return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-			}
-			return ctrl.Result{}, err
-		}
-
-		// Auto-detach: if CI is being deleted, delete this PublicIPAttachment
-		if !ci.DeletionTimestamp.IsZero() {
-			log.Info("auto-detaching: ComputeInstance is being deleted",
-				"computeInstance", ci.Name)
-			if err := r.Delete(ctx, attachment); err != nil {
-				return ctrl.Result{}, client.IgnoreNotFound(err)
-			}
-			return ctrl.Result{}, nil
-		}
-
-		if ci.Status.VirtualMachineReference == nil {
-			log.Info("ComputeInstance has no VirtualMachineReference yet, requeueing",
-				"computeInstance", ci.Name)
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-		}
-
-		// Add CI detach finalizer to prevent CI deletion before detach completes
-		if controllerutil.AddFinalizer(ci, osacPublicIPDetachFinalizer) {
-			log.Info("adding publicip-detach finalizer to ComputeInstance",
-				"computeInstance", ci.Name)
-			if err := r.Update(ctx, ci); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
+	ci, result, err := r.resolveComputeInstance(ctx, attachment)
+	if err != nil || result.RequeueAfter > 0 {
+		return result, err
 	}
 
 	// Sync annotations
@@ -241,6 +209,10 @@ func (r *PublicIPAttachmentReconciler) handleUpdate(ctx context.Context, attachm
 	}
 	if attachment.Annotations[osacPublicIPPoolNameAnnotation] != pool.Name {
 		attachment.Annotations[osacPublicIPPoolNameAnnotation] = pool.Name
+		needsUpdate = true
+	}
+	if attachment.Annotations[osacPublicIPNameAnnotation] != publicIP.Name {
+		attachment.Annotations[osacPublicIPNameAnnotation] = publicIP.Name
 		needsUpdate = true
 	}
 	if ci != nil && ci.Status.VirtualMachineReference != nil {
@@ -284,6 +256,55 @@ func (r *PublicIPAttachmentReconciler) handleUpdate(ctx context.Context, attachm
 	}
 
 	return r.handleProvisioning(ctx, attachment, publicIP, ci)
+}
+
+// resolveComputeInstance looks up the target ComputeInstance by UUID label, handles
+// auto-detach if the CI is being deleted, and adds the detach finalizer.
+// Returns nil CI (with no requeue) when spec.computeInstance is not set.
+func (r *PublicIPAttachmentReconciler) resolveComputeInstance(
+	ctx context.Context,
+	attachment *v1alpha1.PublicIPAttachment,
+) (*v1alpha1.ComputeInstance, ctrl.Result, error) {
+	if attachment.Spec.ComputeInstance == nil {
+		return nil, ctrl.Result{}, nil
+	}
+
+	log := ctrllog.FromContext(ctx)
+
+	ciList := &v1alpha1.ComputeInstanceList{}
+	if err := r.List(ctx, ciList,
+		client.InNamespace(r.ComputeInstanceNamespace),
+		client.MatchingLabels{osacComputeInstanceIDLabel: *attachment.Spec.ComputeInstance},
+	); err != nil {
+		return nil, ctrl.Result{}, err
+	}
+	if len(ciList.Items) == 0 {
+		log.Info("ComputeInstance not found, requeueing", "computeInstanceUUID", *attachment.Spec.ComputeInstance)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	ci := &ciList.Items[0]
+
+	if !ci.DeletionTimestamp.IsZero() {
+		log.Info("auto-detaching: ComputeInstance is being deleted", "computeInstance", ci.Name)
+		if err := r.Delete(ctx, attachment); err != nil {
+			return nil, ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		return nil, ctrl.Result{}, nil
+	}
+
+	if ci.Status.VirtualMachineReference == nil {
+		log.Info("ComputeInstance has no VirtualMachineReference yet, requeueing", "computeInstance", ci.Name)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
+	if controllerutil.AddFinalizer(ci, osacPublicIPDetachFinalizer) {
+		log.Info("adding publicip-detach finalizer to ComputeInstance", "computeInstance", ci.Name)
+		if err := r.Update(ctx, ci); err != nil {
+			return nil, ctrl.Result{}, err
+		}
+	}
+
+	return ci, ctrl.Result{}, nil
 }
 
 func (r *PublicIPAttachmentReconciler) handleProvisioning(
@@ -384,11 +405,16 @@ func (r *PublicIPAttachmentReconciler) handleDelete(ctx context.Context, attachm
 func (r *PublicIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Context, attachment *v1alpha1.PublicIPAttachment) {
 	log := ctrllog.FromContext(ctx)
 
-	// Clear PublicIP.status.attached
-	publicIP := &v1alpha1.PublicIP{}
-	if err := r.Get(ctx, types.NamespacedName{Name: attachment.Spec.PublicIP, Namespace: attachment.Namespace}, publicIP); err != nil {
-		log.Error(err, "failed to fetch PublicIP for attached=false update")
-	} else if publicIP.Status.Attached {
+	// Clear PublicIP.status.attached (look up by UUID label)
+	publicIPList := &v1alpha1.PublicIPList{}
+	if err := r.List(ctx, publicIPList,
+		client.InNamespace(attachment.Namespace),
+		client.MatchingLabels{osacPublicIPIDLabel: attachment.Spec.PublicIP},
+	); err != nil {
+		log.Error(err, "failed to list PublicIPs for attached=false update")
+	} else if len(publicIPList.Items) == 0 {
+		log.Info("parent PublicIP not found during deprovision cleanup", "publicIPUUID", attachment.Spec.PublicIP)
+	} else if publicIP := &publicIPList.Items[0]; publicIP.Status.Attached {
 		publicIP.Status.Attached = false
 		if err := r.Status().Update(ctx, publicIP); err != nil {
 			log.Error(err, "failed to clear PublicIP status.attached")
@@ -397,13 +423,15 @@ func (r *PublicIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Context,
 
 	// Clear ComputeInstance.status.publicIPAddress and remove CI detach finalizer
 	if attachment.Spec.ComputeInstance != nil {
-		ciName := *attachment.Spec.ComputeInstance
-		ci := &v1alpha1.ComputeInstance{}
-		if err := r.Get(ctx, types.NamespacedName{Name: ciName, Namespace: r.ComputeInstanceNamespace}, ci); err != nil {
-			if client.IgnoreNotFound(err) != nil {
-				log.Error(err, "failed to fetch ComputeInstance for cleanup")
-			}
-		} else {
+		ciUUID := *attachment.Spec.ComputeInstance
+		ciList := &v1alpha1.ComputeInstanceList{}
+		if err := r.List(ctx, ciList,
+			client.InNamespace(r.ComputeInstanceNamespace),
+			client.MatchingLabels{osacComputeInstanceIDLabel: ciUUID},
+		); err != nil {
+			log.Error(err, "failed to list ComputeInstances for cleanup")
+		} else if len(ciList.Items) > 0 {
+			ci := &ciList.Items[0]
 			if ci.GetPublicIPAddress() != "" {
 				ci.SetPublicIPAddress("")
 				if err := r.Status().Update(ctx, ci); err != nil {
@@ -412,7 +440,7 @@ func (r *PublicIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Context,
 			}
 		}
 
-		if err := r.maybeRemoveCIDetachFinalizer(ctx, ciName, attachment.Name); err != nil {
+		if err := r.maybeRemoveCIDetachFinalizer(ctx, ciUUID, attachment.Name); err != nil {
 			log.Error(err, "failed to remove CI detach finalizer")
 		}
 	}
@@ -420,13 +448,22 @@ func (r *PublicIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Context,
 
 // maybeRemoveCIDetachFinalizer removes the publicip-detach finalizer from the
 // ComputeInstance if no other PublicIPAttachments (and no PublicIPs) still reference it.
-func (r *PublicIPAttachmentReconciler) maybeRemoveCIDetachFinalizer(ctx context.Context, ciName string, excludeAttachment string) error {
+// ciUUID is the fulfillment-service UUID used in spec.computeInstance and CI labels.
+func (r *PublicIPAttachmentReconciler) maybeRemoveCIDetachFinalizer(ctx context.Context, ciUUID string, excludeAttachment string) error {
 	log := ctrllog.FromContext(ctx)
 
-	ci := &v1alpha1.ComputeInstance{}
-	if err := r.Get(ctx, types.NamespacedName{Name: ciName, Namespace: r.ComputeInstanceNamespace}, ci); err != nil {
-		return client.IgnoreNotFound(err)
+	ciList := &v1alpha1.ComputeInstanceList{}
+	if err := r.List(ctx, ciList,
+		client.InNamespace(r.ComputeInstanceNamespace),
+		client.MatchingLabels{osacComputeInstanceIDLabel: ciUUID},
+	); err != nil {
+		return err
 	}
+	if len(ciList.Items) == 0 {
+		return nil
+	}
+	ci := &ciList.Items[0]
+
 	if !controllerutil.ContainsFinalizer(ci, osacPublicIPDetachFinalizer) {
 		return nil
 	}
@@ -440,32 +477,29 @@ func (r *PublicIPAttachmentReconciler) maybeRemoveCIDetachFinalizer(ctx context.
 		if attachments.Items[i].Name == excludeAttachment {
 			continue
 		}
-		if attachments.Items[i].Spec.ComputeInstance != nil && *attachments.Items[i].Spec.ComputeInstance == ciName {
+		if attachments.Items[i].Spec.ComputeInstance != nil && *attachments.Items[i].Spec.ComputeInstance == ciUUID {
 			log.Info("other PublicIPAttachments still reference CI, keeping finalizer",
-				"computeInstance", ciName,
+				"computeInstanceUUID", ciUUID,
 				"attachment", attachments.Items[i].Name)
 			return nil
 		}
 	}
 
 	// Also check PublicIPs that reference this CI by UUID (shared finalizer)
-	ciUUID, hasUUID := ci.Labels[osacComputeInstanceIDLabel]
-	if hasUUID {
-		publicIPs := &v1alpha1.PublicIPList{}
-		if err := r.List(ctx, publicIPs, client.InNamespace(r.NetworkingNamespace)); err != nil {
-			return err
-		}
-		for i := range publicIPs.Items {
-			if publicIPs.Items[i].Spec.ComputeInstance == ciUUID {
-				log.Info("PublicIP still references CI, keeping finalizer",
-					"computeInstance", ciName,
-					"publicIP", publicIPs.Items[i].Name)
-				return nil
-			}
+	publicIPs := &v1alpha1.PublicIPList{}
+	if err := r.List(ctx, publicIPs, client.InNamespace(r.NetworkingNamespace)); err != nil {
+		return err
+	}
+	for i := range publicIPs.Items {
+		if publicIPs.Items[i].Spec.ComputeInstance == ciUUID {
+			log.Info("PublicIP still references CI, keeping finalizer",
+				"computeInstanceUUID", ciUUID,
+				"publicIP", publicIPs.Items[i].Name)
+			return nil
 		}
 	}
 
-	log.Info("no more references, removing CI detach finalizer", "computeInstance", ciName)
+	log.Info("no more references, removing CI detach finalizer", "computeInstanceUUID", ciUUID)
 	if controllerutil.RemoveFinalizer(ci, osacPublicIPDetachFinalizer) {
 		if err := r.Update(ctx, ci); err != nil {
 			return err
@@ -513,6 +547,10 @@ func (r *PublicIPAttachmentReconciler) handleDeprovisioning(ctx context.Context,
 			}
 			attachment.Status.Jobs = provisioning.AppendJob(attachment.Status.Jobs, newJob, r.MaxJobHistory)
 			log.Info("deprovisioning job triggered", "jobID", result.JobID)
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+
+		default:
+			log.Info("unexpected deprovision action, requeueing", "action", result.Action)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
 	}
@@ -573,7 +611,10 @@ func (r *PublicIPAttachmentReconciler) updateStatusWithRetry(ctx context.Context
 func (r *PublicIPAttachmentReconciler) mapComputeInstanceToPublicIPAttachments(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrllog.FromContext(ctx)
 
-	ciName := obj.GetName()
+	ciUUID, exists := obj.GetLabels()[osacComputeInstanceIDLabel]
+	if !exists {
+		return nil
+	}
 
 	attachments := &v1alpha1.PublicIPAttachmentList{}
 	if err := r.List(ctx, attachments, client.InNamespace(r.NetworkingNamespace)); err != nil {
@@ -583,7 +624,7 @@ func (r *PublicIPAttachmentReconciler) mapComputeInstanceToPublicIPAttachments(c
 
 	var requests []reconcile.Request
 	for i := range attachments.Items {
-		if attachments.Items[i].Spec.ComputeInstance != nil && *attachments.Items[i].Spec.ComputeInstance == ciName {
+		if attachments.Items[i].Spec.ComputeInstance != nil && *attachments.Items[i].Spec.ComputeInstance == ciUUID {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(&attachments.Items[i]),
 			})
@@ -592,7 +633,8 @@ func (r *PublicIPAttachmentReconciler) mapComputeInstanceToPublicIPAttachments(c
 
 	if len(requests) > 0 {
 		log.Info("mapped ComputeInstance change to PublicIPAttachments",
-			"computeInstance", ciName,
+			"computeInstance", obj.GetName(),
+			"computeInstanceUUID", ciUUID,
 			"attachmentCount", len(requests),
 		)
 	}
