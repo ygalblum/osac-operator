@@ -182,6 +182,29 @@ open(sys.argv[2], 'w').write(content)" \
 	done
 	@echo "Done."
 
+##@ API Module
+
+API_VERSION ?= $(error API_VERSION is required (e.g. make tag-api API_VERSION=v0.0.2))
+
+.PHONY: tag-api
+tag-api: ## Tag a new release of the api/ Go module (e.g. make tag-api API_VERSION=v0.0.2).
+	@echo "$(API_VERSION)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || \
+		{ echo "Error: API_VERSION must match vX.Y.Z (got '$(API_VERSION)')"; exit 1; }
+	@REMOTE=$$(git remote -v | grep 'osac-project/osac-operator' | grep '(push)' | awk '{print $$1}' | head -1); \
+	if [ -z "$$REMOTE" ]; then \
+		echo "Error: no remote found pointing to osac-project/osac-operator"; \
+		exit 1; \
+	fi; \
+	if [ -z "$$(git status --porcelain)" ]; then \
+		echo "Tagging api/$(API_VERSION) and pushing to $$REMOTE..." ; \
+		git tag "api/$(API_VERSION)" ; \
+		git push "$$REMOTE" "api/$(API_VERSION)" ; \
+		echo "Tagged and pushed api/$(API_VERSION) to $$REMOTE" ; \
+	else \
+		echo "Error: working tree is dirty — commit or stash changes first" ; \
+		exit 1 ; \
+	fi
+
 ##@ Build
 
 .PHONY: build
