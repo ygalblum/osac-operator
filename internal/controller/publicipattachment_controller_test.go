@@ -545,7 +545,7 @@ var _ = Describe("PublicIPAttachmentReconciler", func() {
 			now := metav1.Now()
 			toDelete.DeletionTimestamp = &now
 
-			_, _ = reconciler.handleDelete(testCtx, toDelete) // trigger
+			_, _ = reconciler.handleDelete(testCtx, toDelete)       // trigger
 			result, _ := reconciler.handleDelete(testCtx, toDelete) // poll -> failed -> block
 
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
