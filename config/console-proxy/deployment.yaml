@@ -21,7 +21,7 @@ spec:
         image: console-proxy
         imagePullPolicy: Always
         command:
-        - /console-proxy
+        - /usr/local/bin/console-proxy
         args:
         - --port=8443
         - --health-probe-bind-address=:8081
