@@ -601,10 +601,10 @@ func setupNetworkingControllers(
 		return fmt.Errorf("publicippool controller: %w", err)
 	}
 
-	// Setup PublicIP controller
+	// Setup PublicIP controller (allocation/deallocation only; attach/detach is in PublicIPAttachment)
 	if err := controller.NewPublicIPReconciler(
-		mgr, networkingNamespace, computeInstanceNamespace,
-		networkingProvider, publicIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
+		mgr, networkingNamespace,
+		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("publicip controller: %w", err)
 	}

@@ -227,9 +227,7 @@ func (r *PublicIPAttachmentReconciler) handleUpdate(ctx context.Context, attachm
 		if err := r.Update(ctx, attachment); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.Get(ctx, client.ObjectKeyFromObject(attachment), attachment); err != nil {
-			return ctrl.Result{}, err
-		}
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	// Compute desired config version
@@ -447,7 +445,7 @@ func (r *PublicIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Context,
 }
 
 // maybeRemoveCIDetachFinalizer removes the publicip-detach finalizer from the
-// ComputeInstance if no other PublicIPAttachments (and no PublicIPs) still reference it.
+// ComputeInstance if no other PublicIPAttachments still reference it.
 // ciUUID is the fulfillment-service UUID used in spec.computeInstance and CI labels.
 func (r *PublicIPAttachmentReconciler) maybeRemoveCIDetachFinalizer(ctx context.Context, ciUUID string, excludeAttachment string) error {
 	log := ctrllog.FromContext(ctx)
@@ -481,20 +479,6 @@ func (r *PublicIPAttachmentReconciler) maybeRemoveCIDetachFinalizer(ctx context.
 			log.Info("other PublicIPAttachments still reference CI, keeping finalizer",
 				"computeInstanceUUID", ciUUID,
 				"attachment", attachments.Items[i].Name)
-			return nil
-		}
-	}
-
-	// Also check PublicIPs that reference this CI by UUID (shared finalizer)
-	publicIPs := &v1alpha1.PublicIPList{}
-	if err := r.List(ctx, publicIPs, client.InNamespace(r.NetworkingNamespace)); err != nil {
-		return err
-	}
-	for i := range publicIPs.Items {
-		if publicIPs.Items[i].Spec.ComputeInstance == ciUUID {
-			log.Info("PublicIP still references CI, keeping finalizer",
-				"computeInstanceUUID", ciUUID,
-				"publicIP", publicIPs.Items[i].Name)
 			return nil
 		}
 	}

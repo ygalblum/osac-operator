@@ -122,6 +122,7 @@ func NewComputeInstanceReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=publicips,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=publicipattachments,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines;virtualmachineinstances,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
@@ -243,8 +244,8 @@ func (r *ComputeInstanceReconciler) SetupWithManager(mgr mcmanager.Manager) erro
 			mcbuilder.WithEngageWithProviderClusters(false),
 		).
 		Watches(
-			&v1alpha1.PublicIP{},
-			mchandler.EnqueueRequestsFromMapFunc(r.mapPublicIPToComputeInstance),
+			&v1alpha1.PublicIPAttachment{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapPublicIPAttachmentToComputeInstance),
 			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false),
@@ -328,28 +329,29 @@ func (r *ComputeInstanceReconciler) mapTenantToComputeInstances(ctx context.Cont
 	return requests
 }
 
-// mapPublicIPToComputeInstance maps a PublicIP change to the ComputeInstance it references
-// via spec.computeInstance (CI UUID). This triggers a CI reconcile when a PublicIP is
-// attached, detached, or has its address updated.
-func (r *ComputeInstanceReconciler) mapPublicIPToComputeInstance(ctx context.Context, obj client.Object) []reconcile.Request {
+// mapPublicIPAttachmentToComputeInstance maps a PublicIPAttachment change to the
+// ComputeInstance it references via spec.computeInstance (CI UUID). This triggers
+// a CI reconcile when an attachment is created, deleted, or changes phase so that
+// syncPublicIPAddress can update the CI's publicIPAddress status field.
+func (r *ComputeInstanceReconciler) mapPublicIPAttachmentToComputeInstance(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrllog.FromContext(ctx)
 
-	publicIP, ok := obj.(*v1alpha1.PublicIP)
+	attachment, ok := obj.(*v1alpha1.PublicIPAttachment)
 	if !ok {
 		return nil
 	}
 
-	ciUUID := publicIP.Spec.ComputeInstance
-	if ciUUID == "" {
+	if attachment.Spec.ComputeInstance == nil || *attachment.Spec.ComputeInstance == "" {
 		return nil
 	}
+	ciUUID := *attachment.Spec.ComputeInstance
 
 	ciList := &v1alpha1.ComputeInstanceList{}
 	if err := r.List(ctx, ciList,
 		client.InNamespace(r.ComputeInstanceNamespace),
 		client.MatchingLabels{osacComputeInstanceIDLabel: ciUUID},
 	); err != nil {
-		log.Error(err, "failed to list ComputeInstances for PublicIP watch")
+		log.Error(err, "failed to list ComputeInstances for PublicIPAttachment watch")
 		return nil
 	}
 
@@ -361,8 +363,8 @@ func (r *ComputeInstanceReconciler) mapPublicIPToComputeInstance(ctx context.Con
 	}
 
 	if len(requests) > 0 {
-		log.Info("mapped PublicIP change to ComputeInstance",
-			"publicIP", publicIP.Name,
+		log.Info("mapped PublicIPAttachment change to ComputeInstance",
+			"attachment", attachment.Name,
 			"computeInstanceUUID", ciUUID,
 		)
 	}
@@ -370,7 +372,8 @@ func (r *ComputeInstanceReconciler) mapPublicIPToComputeInstance(ctx context.Con
 	return requests
 }
 
-// syncPublicIPAddress looks up attached PublicIP CRs and populates status.publicIPAddress.
+// syncPublicIPAddress finds Ready PublicIPAttachments referencing this CI and
+// populates status.publicIPAddress from the parent PublicIP's allocated address.
 func (r *ComputeInstanceReconciler) syncPublicIPAddress(ctx context.Context, instance *v1alpha1.ComputeInstance) {
 	log := ctrllog.FromContext(ctx)
 
@@ -380,17 +383,33 @@ func (r *ComputeInstanceReconciler) syncPublicIPAddress(ctx context.Context, ins
 		return
 	}
 
-	publicIPs := &v1alpha1.PublicIPList{}
-	if err := r.List(ctx, publicIPs, client.InNamespace(r.NetworkingNamespace)); err != nil {
-		log.Error(err, "failed to list PublicIPs for public IP address sync")
+	attachments := &v1alpha1.PublicIPAttachmentList{}
+	if err := r.List(ctx, attachments, client.InNamespace(r.NetworkingNamespace)); err != nil {
+		log.Error(err, "failed to list PublicIPAttachments for public IP address sync")
 		return
 	}
 
-	for i := range publicIPs.Items {
-		pip := &publicIPs.Items[i]
-		if pip.Spec.ComputeInstance == ciUUID &&
-			pip.Status.State == v1alpha1.PublicIPStateAttached &&
-			pip.Status.Address != "" {
+	for i := range attachments.Items {
+		att := &attachments.Items[i]
+		if att.Spec.ComputeInstance == nil || *att.Spec.ComputeInstance != ciUUID {
+			continue
+		}
+		if att.Status.Phase != v1alpha1.PublicIPAttachmentPhaseReady {
+			continue
+		}
+		pipList := &v1alpha1.PublicIPList{}
+		if err := r.List(ctx, pipList,
+			client.InNamespace(r.NetworkingNamespace),
+			client.MatchingLabels{osacPublicIPIDLabel: att.Spec.PublicIP},
+		); err != nil {
+			log.Error(err, "failed to list PublicIPs for address sync", "publicIPUUID", att.Spec.PublicIP)
+			continue
+		}
+		if len(pipList.Items) == 0 {
+			continue
+		}
+		pip := &pipList.Items[0]
+		if pip.Status.Address != "" {
 			instance.SetPublicIPAddress(pip.Status.Address)
 			return
 		}

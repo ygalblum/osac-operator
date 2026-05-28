@@ -722,36 +722,9 @@ var _ = ginkgo.Describe("IsConfigApplied", func() {
 		Expect(IsConfigApplied(&jobs, "v2")).To(BeFalse())
 	})
 
-	ginkgo.It("returns true when an attach job succeeded with matching config version", func() {
-		now := time.Now()
-		jobs := []v1alpha1.JobStatus{
-			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-time.Minute))},
-			{JobID: "2", Type: v1alpha1.JobTypeAttach, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v2", Timestamp: metav1.NewTime(now)},
-		}
-		Expect(IsConfigApplied(&jobs, "v2")).To(BeTrue())
-	})
-
-	ginkgo.It("returns true when a detach job succeeded with matching config version", func() {
-		now := time.Now()
-		jobs := []v1alpha1.JobStatus{
-			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-time.Minute))},
-			{JobID: "2", Type: v1alpha1.JobTypeDetach, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v3", Timestamp: metav1.NewTime(now)},
-		}
-		Expect(IsConfigApplied(&jobs, "v3")).To(BeTrue())
-	})
-
-	ginkgo.It("returns false when attach job succeeded but with wrong config version", func() {
-		now := time.Now()
-		jobs := []v1alpha1.JobStatus{
-			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: metav1.NewTime(now.Add(-time.Minute))},
-			{JobID: "2", Type: v1alpha1.JobTypeAttach, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v2", Timestamp: metav1.NewTime(now)},
-		}
-		Expect(IsConfigApplied(&jobs, "v3")).To(BeFalse())
-	})
-
 	ginkgo.It("returns false when matching config version job failed", func() {
 		jobs := []v1alpha1.JobStatus{
-			{JobID: "1", Type: v1alpha1.JobTypeAttach, State: v1alpha1.JobStateFailed, ConfigVersion: "v2"},
+			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateFailed, ConfigVersion: "v2"},
 		}
 		Expect(IsConfigApplied(&jobs, "v2")).To(BeFalse())
 	})
@@ -761,14 +734,6 @@ var _ = ginkgo.Describe("IsConfigApplied", func() {
 			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: ""},
 		}
 		Expect(IsConfigApplied(&jobs, "v1")).To(BeTrue())
-	})
-
-	ginkgo.It("does not treat legacy attach job as applied", func() {
-		// Legacy fallback only applies to the latest provision job, not attach/detach.
-		jobs := []v1alpha1.JobStatus{
-			{JobID: "1", Type: v1alpha1.JobTypeAttach, State: v1alpha1.JobStateSucceeded, ConfigVersion: ""},
-		}
-		Expect(IsConfigApplied(&jobs, "v1")).To(BeFalse())
 	})
 
 	ginkgo.It("returns false when spec reverts to a previously applied config version (A-B-A)", func() {

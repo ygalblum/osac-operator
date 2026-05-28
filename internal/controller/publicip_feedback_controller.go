@@ -230,12 +230,6 @@ func (t *publicIPFeedbackReconcilerTask) syncState(ctx context.Context) {
 		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_PENDING)
 	case v1alpha1.PublicIPStateAllocated:
 		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_ALLOCATED)
-	case v1alpha1.PublicIPStateAttaching:
-		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_ATTACHING)
-	case v1alpha1.PublicIPStateAttached:
-		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_ATTACHED)
-	case v1alpha1.PublicIPStateReleasing:
-		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_RELEASING)
 	case v1alpha1.PublicIPStateFailed:
 		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_FAILED)
 	default:

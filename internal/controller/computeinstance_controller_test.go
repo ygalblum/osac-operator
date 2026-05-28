@@ -36,6 +36,7 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac-operator/pkg/provisioning"
+	"k8s.io/utils/ptr"
 )
 
 const testTemplateParams = `{"key": "value"}`
@@ -2671,27 +2672,43 @@ var _ = Describe("ComputeInstance Controller", func() {
 			reconciler = NewComputeInstanceReconciler(testMcManager, "", "default", networkingNS, &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
 		})
 
-		It("populates publicIPAddress from an attached PublicIP", func() {
+		It("populates publicIPAddress from a Ready PublicIPAttachment", func() {
+			const pipUUID = "pip-uuid-sync-attached"
 			pip := &osacv1alpha1.PublicIP{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "pip-sync-attached",
 					Namespace: networkingNS,
+					Labels:    map[string]string{osacPublicIPIDLabel: pipUUID},
 				},
 				Spec: osacv1alpha1.PublicIPSpec{
-					Pool:            "pool-uuid",
-					ComputeInstance: ciUUID,
+					Pool: "pool-uuid",
 				},
 			}
 			Expect(k8sClient.Create(ctx, pip)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pip) })
-			pip.Status.State = osacv1alpha1.PublicIPStateAttached
 			pip.Status.Address = "203.0.113.10"
+			pip.Status.Attached = true
 			Expect(k8sClient.Status().Update(ctx, pip)).To(Succeed())
 
+			att := &osacv1alpha1.PublicIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "att-sync-ready",
+					Namespace: networkingNS,
+				},
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        pipUUID,
+					ComputeInstance: ptr.To(ciUUID),
+				},
+			}
+			Expect(k8sClient.Create(ctx, att)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, att) })
+			att.Status.Phase = osacv1alpha1.PublicIPAttachmentPhaseReady
+			Expect(k8sClient.Status().Update(ctx, att)).To(Succeed())
+
 			Eventually(func(g Gomega) {
-				p := &osacv1alpha1.PublicIP{}
-				g.Expect(testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(pip), p)).To(Succeed())
-				g.Expect(p.Status.State).To(Equal(osacv1alpha1.PublicIPStateAttached))
+				a := &osacv1alpha1.PublicIPAttachment{}
+				g.Expect(testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(att), a)).To(Succeed())
+				g.Expect(a.Status.Phase).To(Equal(osacv1alpha1.PublicIPAttachmentPhaseReady))
 			}).Should(Succeed())
 
 			ci := &osacv1alpha1.ComputeInstance{
@@ -2703,27 +2720,42 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(ci.GetPublicIPAddress()).To(Equal("203.0.113.10"))
 		})
 
-		It("does not populate when PublicIP is not in Attached state", func() {
+		It("does not populate when PublicIPAttachment is not Ready", func() {
+			const pipUUID = "pip-uuid-sync-progressing"
 			pip := &osacv1alpha1.PublicIP{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "pip-sync-allocated",
+					Name:      "pip-sync-progressing",
 					Namespace: networkingNS,
+					Labels:    map[string]string{osacPublicIPIDLabel: pipUUID},
 				},
 				Spec: osacv1alpha1.PublicIPSpec{
-					Pool:            "pool-uuid",
-					ComputeInstance: ciUUID,
+					Pool: "pool-uuid",
 				},
 			}
 			Expect(k8sClient.Create(ctx, pip)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pip) })
-			pip.Status.State = osacv1alpha1.PublicIPStateAllocated
 			pip.Status.Address = "203.0.113.11"
 			Expect(k8sClient.Status().Update(ctx, pip)).To(Succeed())
 
+			att := &osacv1alpha1.PublicIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "att-sync-progressing",
+					Namespace: networkingNS,
+				},
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        pipUUID,
+					ComputeInstance: ptr.To(ciUUID),
+				},
+			}
+			Expect(k8sClient.Create(ctx, att)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, att) })
+			att.Status.Phase = osacv1alpha1.PublicIPAttachmentPhaseProgressing
+			Expect(k8sClient.Status().Update(ctx, att)).To(Succeed())
+
 			Eventually(func(g Gomega) {
-				p := &osacv1alpha1.PublicIP{}
-				g.Expect(testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(pip), p)).To(Succeed())
-				g.Expect(p.Status.State).To(Equal(osacv1alpha1.PublicIPStateAllocated))
+				a := &osacv1alpha1.PublicIPAttachment{}
+				g.Expect(testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(att), a)).To(Succeed())
+				g.Expect(a.Status.Phase).To(Equal(osacv1alpha1.PublicIPAttachmentPhaseProgressing))
 			}).Should(Succeed())
 
 			ci := &osacv1alpha1.ComputeInstance{
@@ -2745,59 +2777,42 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(ci.GetPublicIPAddress()).To(BeEmpty())
 		})
 
-		It("clears publicIPAddress when PublicIP address is empty", func() {
-			pip := &osacv1alpha1.PublicIP{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "pip-sync-empty-addr",
-					Namespace: networkingNS,
-				},
-				Spec: osacv1alpha1.PublicIPSpec{
-					Pool:            "pool-uuid",
-					ComputeInstance: ciUUID,
-				},
-			}
-			Expect(k8sClient.Create(ctx, pip)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pip) })
-			pip.Status.State = osacv1alpha1.PublicIPStateAttached
-			pip.Status.Address = ""
-			Expect(k8sClient.Status().Update(ctx, pip)).To(Succeed())
-
-			Eventually(func(g Gomega) {
-				p := &osacv1alpha1.PublicIP{}
-				g.Expect(testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(pip), p)).To(Succeed())
-				g.Expect(p.Status.State).To(Equal(osacv1alpha1.PublicIPStateAttached))
-			}).Should(Succeed())
-
-			ci := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{osacComputeInstanceIDLabel: ciUUID},
-				},
-			}
-			reconciler.syncPublicIPAddress(ctx, ci)
-			Expect(ci.GetPublicIPAddress()).To(BeEmpty())
-		})
-
-		It("does not populate when PublicIP references a different CI", func() {
+		It("does not populate when PublicIPAttachment references a different CI", func() {
+			const pipUUID = "pip-uuid-sync-other-ci"
 			pip := &osacv1alpha1.PublicIP{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "pip-sync-other-ci",
 					Namespace: networkingNS,
+					Labels:    map[string]string{osacPublicIPIDLabel: pipUUID},
 				},
 				Spec: osacv1alpha1.PublicIPSpec{
-					Pool:            "pool-uuid",
-					ComputeInstance: "other-ci-uuid",
+					Pool: "pool-uuid",
 				},
 			}
 			Expect(k8sClient.Create(ctx, pip)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pip) })
-			pip.Status.State = osacv1alpha1.PublicIPStateAttached
 			pip.Status.Address = "203.0.113.12"
 			Expect(k8sClient.Status().Update(ctx, pip)).To(Succeed())
 
+			att := &osacv1alpha1.PublicIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "att-sync-other-ci",
+					Namespace: networkingNS,
+				},
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        pipUUID,
+					ComputeInstance: ptr.To("other-ci-uuid"),
+				},
+			}
+			Expect(k8sClient.Create(ctx, att)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, att) })
+			att.Status.Phase = osacv1alpha1.PublicIPAttachmentPhaseReady
+			Expect(k8sClient.Status().Update(ctx, att)).To(Succeed())
+
 			Eventually(func(g Gomega) {
-				p := &osacv1alpha1.PublicIP{}
-				g.Expect(testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(pip), p)).To(Succeed())
-				g.Expect(p.Status.State).To(Equal(osacv1alpha1.PublicIPStateAttached))
+				a := &osacv1alpha1.PublicIPAttachment{}
+				g.Expect(testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(att), a)).To(Succeed())
+				g.Expect(a.Status.Phase).To(Equal(osacv1alpha1.PublicIPAttachmentPhaseReady))
 			}).Should(Succeed())
 
 			ci := &osacv1alpha1.ComputeInstance{
@@ -2809,27 +2824,43 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(ci.GetPublicIPAddress()).To(BeEmpty())
 		})
 
-		It("clears publicIPAddress when PublicIP is detached", func() {
+		It("does not populate when PublicIP has empty address", func() {
+			const pipUUID = "pip-uuid-sync-empty-addr"
 			pip := &osacv1alpha1.PublicIP{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "pip-sync-detach",
+					Name:      "pip-sync-empty-addr",
 					Namespace: networkingNS,
+					Labels:    map[string]string{osacPublicIPIDLabel: pipUUID},
 				},
 				Spec: osacv1alpha1.PublicIPSpec{
-					Pool:            "pool-uuid",
-					ComputeInstance: ciUUID,
+					Pool: "pool-uuid",
 				},
 			}
 			Expect(k8sClient.Create(ctx, pip)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pip) })
-			pip.Status.State = osacv1alpha1.PublicIPStateAttached
-			pip.Status.Address = "203.0.113.13"
+			pip.Status.Attached = true
+			pip.Status.Address = ""
 			Expect(k8sClient.Status().Update(ctx, pip)).To(Succeed())
 
+			att := &osacv1alpha1.PublicIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "att-sync-empty-addr",
+					Namespace: networkingNS,
+				},
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        pipUUID,
+					ComputeInstance: ptr.To(ciUUID),
+				},
+			}
+			Expect(k8sClient.Create(ctx, att)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, att) })
+			att.Status.Phase = osacv1alpha1.PublicIPAttachmentPhaseReady
+			Expect(k8sClient.Status().Update(ctx, att)).To(Succeed())
+
 			Eventually(func(g Gomega) {
-				p := &osacv1alpha1.PublicIP{}
-				g.Expect(testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(pip), p)).To(Succeed())
-				g.Expect(p.Status.State).To(Equal(osacv1alpha1.PublicIPStateAttached))
+				a := &osacv1alpha1.PublicIPAttachment{}
+				g.Expect(testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(att), a)).To(Succeed())
+				g.Expect(a.Status.Phase).To(Equal(osacv1alpha1.PublicIPAttachmentPhaseReady))
 			}).Should(Succeed())
 
 			ci := &osacv1alpha1.ComputeInstance{
@@ -2837,25 +2868,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Labels: map[string]string{osacComputeInstanceIDLabel: ciUUID},
 				},
 			}
-			reconciler.syncPublicIPAddress(ctx, ci)
-			Expect(ci.GetPublicIPAddress()).To(Equal("203.0.113.13"))
-
-			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pip), pip)).To(Succeed())
-			pip.Status.State = osacv1alpha1.PublicIPStateReleasing
-			Expect(k8sClient.Status().Update(ctx, pip)).To(Succeed())
-
-			Eventually(func(g Gomega) {
-				p := &osacv1alpha1.PublicIP{}
-				g.Expect(testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(pip), p)).To(Succeed())
-				g.Expect(p.Status.State).To(Equal(osacv1alpha1.PublicIPStateReleasing))
-			}).Should(Succeed())
-
 			reconciler.syncPublicIPAddress(ctx, ci)
 			Expect(ci.GetPublicIPAddress()).To(BeEmpty())
 		})
 	})
 
-	Context("mapPublicIPToComputeInstance", func() {
+	Context("mapPublicIPAttachmentToComputeInstance", func() {
 		var reconciler *ComputeInstanceReconciler
 		const ciNS = "default"
 		const networkingNS = "default"
@@ -2887,51 +2905,51 @@ var _ = Describe("ComputeInstance Controller", func() {
 				return testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(ci), &osacv1alpha1.ComputeInstance{})
 			}).Should(Succeed())
 
-			pip := &osacv1alpha1.PublicIP{
+			att := &osacv1alpha1.PublicIPAttachment{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "pip-map-match",
+					Name:      "att-map-match",
 					Namespace: networkingNS,
 				},
-				Spec: osacv1alpha1.PublicIPSpec{
-					Pool:            "pool-uuid",
-					ComputeInstance: mapCIUUID,
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        "some-pip",
+					ComputeInstance: ptr.To(mapCIUUID),
 				},
 			}
 
-			requests := reconciler.mapPublicIPToComputeInstance(ctx, pip)
+			requests := reconciler.mapPublicIPAttachmentToComputeInstance(ctx, att)
 			Expect(requests).To(HaveLen(1))
 			Expect(requests[0].NamespacedName.Name).To(Equal("ci-map-match"))
 			Expect(requests[0].NamespacedName.Namespace).To(Equal(ciNS))
 		})
 
-		It("returns nil when PublicIP has no computeInstance", func() {
-			pip := &osacv1alpha1.PublicIP{
+		It("returns nil when PublicIPAttachment has no computeInstance", func() {
+			att := &osacv1alpha1.PublicIPAttachment{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "pip-map-empty",
+					Name:      "att-map-empty",
 					Namespace: networkingNS,
 				},
-				Spec: osacv1alpha1.PublicIPSpec{
-					Pool: "pool-uuid",
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP: "some-pip",
 				},
 			}
 
-			requests := reconciler.mapPublicIPToComputeInstance(ctx, pip)
+			requests := reconciler.mapPublicIPAttachmentToComputeInstance(ctx, att)
 			Expect(requests).To(BeNil())
 		})
 
 		It("returns empty when no CI matches the UUID", func() {
-			pip := &osacv1alpha1.PublicIP{
+			att := &osacv1alpha1.PublicIPAttachment{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "pip-map-nomatch",
+					Name:      "att-map-nomatch",
 					Namespace: networkingNS,
 				},
-				Spec: osacv1alpha1.PublicIPSpec{
-					Pool:            "pool-uuid",
-					ComputeInstance: "nonexistent-uuid",
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        "some-pip",
+					ComputeInstance: ptr.To("nonexistent-uuid"),
 				},
 			}
 
-			requests := reconciler.mapPublicIPToComputeInstance(ctx, pip)
+			requests := reconciler.mapPublicIPAttachmentToComputeInstance(ctx, att)
 			Expect(requests).To(BeEmpty())
 		})
 	})

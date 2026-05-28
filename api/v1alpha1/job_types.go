@@ -21,7 +21,7 @@ import (
 )
 
 // JobType represents the type of job operation
-// +kubebuilder:validation:Enum=provision;deprovision;attach;detach
+// +kubebuilder:validation:Enum=provision;deprovision
 type JobType string
 
 const (
@@ -29,10 +29,6 @@ const (
 	JobTypeProvision JobType = "provision"
 	// JobTypeDeprovision indicates a deprovisioning operation
 	JobTypeDeprovision JobType = "deprovision"
-	// JobTypeAttach indicates an attachment operation (e.g., PublicIP to ComputeInstance)
-	JobTypeAttach JobType = "attach"
-	// JobTypeDetach indicates a detachment operation (e.g., PublicIP from ComputeInstance)
-	JobTypeDetach JobType = "detach"
 )
 
 // JobState represents the current state of a job

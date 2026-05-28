@@ -20,10 +20,6 @@ import (
 const (
 	publicipControllerName = "publicip-controller"
 
-	eventReasonAttached     = "Attached"
-	eventReasonDetached     = "Detached"
-	eventReasonAutoDetached = "AutoDetached"
-
 	// Must match the AAP playbook Service naming convention in osac-aap.
 	publicIPServiceNamePrefix = "osac-pip-"
 	defaultMetalLBNamespace   = "metallb-system"

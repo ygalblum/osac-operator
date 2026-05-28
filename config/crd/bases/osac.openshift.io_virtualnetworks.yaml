@@ -193,8 +193,6 @@ spec:
                       enum:
                       - provision
                       - deprovision
-                      - attach
-                      - detach
                       type: string
                   required:
                   - jobID

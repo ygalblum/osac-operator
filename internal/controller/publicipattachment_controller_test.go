@@ -610,22 +610,32 @@ var _ = Describe("PublicIPAttachmentReconciler", func() {
 			Expect(updatedCI.Finalizers).To(ContainElement(osacPublicIPDetachFinalizer))
 		})
 
-		It("should keep detach finalizer when PublicIPs still reference the CI by UUID", func() {
-			pipWithCI := &osacv1alpha1.PublicIP{
+		It("should keep detach finalizer when other PublicIPAttachments still reference the CI", func() {
+			excludedAttachment := &osacv1alpha1.PublicIPAttachment{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "pip-with-ci",
+					Name:      "excluded-attachment",
 					Namespace: testNetworkingNamespace,
 				},
-				Spec: osacv1alpha1.PublicIPSpec{
-					Pool:            testPoolUUID,
-					ComputeInstance: testCIUUID,
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        "excluded-pip",
+					ComputeInstance: ptr.To(testCIUUID),
+				},
+			}
+			remainingAttachment := &osacv1alpha1.PublicIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "remaining-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.PublicIPAttachmentSpec{
+					PublicIP:        "remaining-pip",
+					ComputeInstance: ptr.To(testCIUUID),
 				},
 			}
 			ci.Finalizers = []string{osacPublicIPDetachFinalizer}
-			fakeClient = buildClient(ci, pipWithCI)
+			fakeClient = buildClient(ci, excludedAttachment, remainingAttachment)
 			setupReconciler(fakeClient)
 
-			err := reconciler.maybeRemoveCIDetachFinalizer(testCtx, testCIUUID, "")
+			err := reconciler.maybeRemoveCIDetachFinalizer(testCtx, testCIUUID, "excluded-attachment")
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedCI := &osacv1alpha1.ComputeInstance{}
