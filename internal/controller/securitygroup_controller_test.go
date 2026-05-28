@@ -813,7 +813,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			jobs := []osacv1alpha1.JobStatus{}
 
 			// Add 15 jobs
-			for i := 0; i < 15; i++ {
+			for i := range 15 {
 				newJob := osacv1alpha1.JobStatus{
 					JobID:     string(rune('a' + i)),
 					Type:      osacv1alpha1.JobTypeProvision,

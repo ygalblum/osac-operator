@@ -71,7 +71,7 @@ func TestWebhookClientCache(t *testing.T) {
 		const workers = 10
 		var wg sync.WaitGroup
 
-		for i := 0; i < workers; i++ {
+		for i := range workers {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
@@ -94,7 +94,7 @@ func TestWebhookClientCache(t *testing.T) {
 		const goroutines = 100
 		var wg sync.WaitGroup
 
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()

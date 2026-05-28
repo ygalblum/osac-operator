@@ -392,7 +392,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 			// Set to running and poll multiple times
 			provider.setProvisionJobState(osacv1alpha1.JobStateRunning, "Job running - step 1")
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				result, err := reconciler.handleProvisioning(ctx, instance)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))

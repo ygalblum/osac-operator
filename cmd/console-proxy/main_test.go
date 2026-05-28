@@ -40,7 +40,7 @@ var _ = Describe("buildConfigResolver", func() {
 	})
 
 	DescribeTable("with a valid mode returns the correct resolver type",
-		func(mode string, expectedType interface{}) {
+		func(mode string, expectedType any) {
 			resolver, err := buildConfigResolver(mode, fakeClient, hubConfig, logger)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resolver).To(BeAssignableToTypeOf(expectedType))

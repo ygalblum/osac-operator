@@ -676,7 +676,7 @@ var _ = Describe("PublicIPAttachmentReconciler", func() {
 
 		It("should not map CI changes to unrelated attachments", func() {
 			unrelatedAttachment := attachment.DeepCopy()
-			unrelatedAttachment.Spec.ComputeInstance = ptr.To("other-ci")
+			unrelatedAttachment.Spec.ComputeInstance = new("other-ci")
 			fakeClient = buildClient(unrelatedAttachment, publicIP, pool, ci)
 			setupReconciler(fakeClient)
 

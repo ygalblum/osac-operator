@@ -633,7 +633,7 @@ var _ = Describe("PublicIPReconciler", func() {
 			}
 
 			// Pass 1: finalizer, Pass 2: trigger job, Pass 3: poll -> Succeeded -> OnSuccess
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 				Expect(err).NotTo(HaveOccurred())
 			}
