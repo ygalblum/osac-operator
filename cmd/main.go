@@ -71,18 +71,9 @@ var (
 
 const (
 	// Namespace environment variables
-	envComputeInstanceNamespace          = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
-	envNetworkingNamespace               = "OSAC_NETWORKING_NAMESPACE"
-	envClusterOrderNamespace             = "OSAC_CLUSTER_ORDER_NAMESPACE"
-	envComputeInstanceProvisionWebhook   = "OSAC_COMPUTE_INSTANCE_PROVISION_WEBHOOK"
-	envComputeInstanceDeprovisionWebhook = "OSAC_COMPUTE_INSTANCE_DEPROVISION_WEBHOOK"
-
-	// Cluster (ClusterOrder) EDA webhook environment variables
-	envClusterCreateWebhook = "OSAC_CLUSTER_CREATE_WEBHOOK"
-	envClusterDeleteWebhook = "OSAC_CLUSTER_DELETE_WEBHOOK"
-
-	// Provider selection
-	envProvisioningProvider = "OSAC_PROVISIONING_PROVIDER"
+	envComputeInstanceNamespace = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
+	envNetworkingNamespace      = "OSAC_NETWORKING_NAMESPACE"
+	envClusterOrderNamespace    = "OSAC_CLUSTER_ORDER_NAMESPACE"
 
 	// AAP configuration
 	envAAPURL                 = "OSAC_AAP_URL"
@@ -96,10 +87,6 @@ const (
 	// Cluster (ClusterOrder) AAP template overrides
 	envClusterAAPProvisionTemplate   = "OSAC_CLUSTER_AAP_PROVISION_TEMPLATE"
 	envClusterAAPDeprovisionTemplate = "OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE"
-
-	// PublicIP attachment webhook environment variables (used when OSAC_PROVISIONING_PROVIDER=eda)
-	envPublicIPAttachWebhook = "OSAC_PUBLIC_IP_ATTACH_WEBHOOK"
-	envPublicIPDetachWebhook = "OSAC_PUBLIC_IP_DETACH_WEBHOOK"
 
 	// Tenant-specific AAP template overrides (default: osac-create-org / osac-delete-org)
 	envTenantAAPProvisionTemplate   = "OSAC_TENANT_AAP_PROVISION_TEMPLATE"
@@ -218,25 +205,6 @@ func newClusterFromKubeconfig(kubeconfigPath string, scheme *runtime.Scheme) (cl
 	return cl, nil
 }
 
-// createEDAProvider creates and validates EDA webhook provider configuration.
-func createEDAProvider(
-	provisionWebhook, deprovisionWebhook string,
-	minimumRequestInterval time.Duration,
-) (provisioning.ProvisioningProvider, time.Duration, error) {
-	webhookClient := controller.NewWebhookClient(10*time.Second, minimumRequestInterval)
-
-	provider := provisioning.NewEDAProvider(
-		webhookClient,
-		provisionWebhook, deprovisionWebhook,
-	)
-
-	setupLog.Info("using EDA webhook provider",
-		"provisionWebhook", provisionWebhook,
-		"deprovisionWebhook", deprovisionWebhook)
-
-	return provider, provisioning.DefaultStatusPollInterval, nil
-}
-
 // createAAPProvider creates and validates AAP direct provider configuration.
 func createAAPProvider(
 	aapURL, aapToken, provisionTemplate, deprovisionTemplate, templatePrefix string,
@@ -246,7 +214,6 @@ func createAAPProvider(
 
 	aapClient := aap.NewClient(aapURL, aapToken, aapInsecureSkipVerify)
 	config := provisioning.ProviderConfig{
-		ProviderType:        provisioning.ProviderTypeAAP,
 		AAPClient:           aapClient,
 		ProvisionTemplate:   provisionTemplate,
 		DeprovisionTemplate: deprovisionTemplate,
@@ -269,72 +236,34 @@ func createAAPProvider(
 	return provider, statusPollInterval, nil
 }
 
-// createProvider creates a provisioning provider based on type.
-func createProvider(
-	providerType provisioning.ProviderType,
-	provisionWebhook, deprovisionWebhook string,
-	aapURL, aapToken, provisionTemplate, deprovisionTemplate, templatePrefix string,
-	aapInsecureSkipVerify bool,
-	minimumRequestInterval time.Duration,
-) (provisioning.ProvisioningProvider, time.Duration, error) {
-	switch providerType {
-	case provisioning.ProviderTypeEDA:
-		return createEDAProvider(provisionWebhook, deprovisionWebhook, minimumRequestInterval)
-
-	case provisioning.ProviderTypeAAP:
-		return createAAPProvider(
-			aapURL, aapToken, provisionTemplate, deprovisionTemplate,
-			templatePrefix, aapInsecureSkipVerify,
-		)
-
-	default:
-		return nil, 0, fmt.Errorf("unknown provider type: %s", providerType)
-	}
-}
-
-// createProviderFromEnv creates a provisioning provider by reading shared env vars
-// and optional per-resource-type template overrides. Defaults to AAP direct when no
-// provider type is configured.
-func createProviderFromEnv(
-	provisionWebhookEnv, deprovisionWebhookEnv string,
+// createAAPProviderFromEnv creates an AAP provider by reading shared env vars
+// and optional per-resource-type template overrides.
+func createAAPProviderFromEnv(
 	templateOverrideProvisionEnv, templateOverrideDeprovisionEnv string,
-	minimumRequestInterval time.Duration,
 ) (provisioning.ProvisioningProvider, time.Duration, error) {
-	providerType := provisioning.ProviderType(os.Getenv(envProvisioningProvider))
-	if providerType == "" {
-		providerType = provisioning.ProviderTypeAAP
-	}
-	provisionWebhook := os.Getenv(provisionWebhookEnv)
-	deprovisionWebhook := os.Getenv(deprovisionWebhookEnv)
 	aapURL := os.Getenv(envAAPURL)
 	aapToken := os.Getenv(envAAPToken)
 	provisionTemplate := helpers.GetEnvWithDefault(templateOverrideProvisionEnv, os.Getenv(envAAPProvisionTemplate))
 	deprovisionTemplate := helpers.GetEnvWithDefault(templateOverrideDeprovisionEnv, os.Getenv(envAAPDeprovisionTemplate))
 	templatePrefix := helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac")
 	aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
-	return createProvider(
-		providerType,
-		provisionWebhook, deprovisionWebhook,
-		aapURL, aapToken, provisionTemplate, deprovisionTemplate, templatePrefix,
-		aapInsecureSkipVerify,
-		minimumRequestInterval,
+	return createAAPProvider(
+		aapURL, aapToken, provisionTemplate, deprovisionTemplate,
+		templatePrefix, aapInsecureSkipVerify,
 	)
 }
 
-// setupWebhookController handles the shared flow: feedback setup, provider creation, reconciler setup.
-func setupWebhookController(
-	minimumRequestInterval time.Duration,
-	provisionWebhookEnv, deprovisionWebhookEnv, aapProvisionTemplateEnv, aapDeprovisionTemplateEnv string,
+// setupProvisioningController handles the shared flow: feedback setup, provider creation, reconciler setup.
+func setupProvisioningController(
+	aapProvisionTemplateEnv, aapDeprovisionTemplateEnv string,
 	setupFeedback func() error,
 	setupReconciler func(provisioning.ProvisioningProvider, time.Duration) error,
 ) error {
 	if err := setupFeedback(); err != nil {
 		return err
 	}
-	provider, statusPollInterval, err := createProviderFromEnv(
-		provisionWebhookEnv, deprovisionWebhookEnv,
+	provider, statusPollInterval, err := createAAPProviderFromEnv(
 		aapProvisionTemplateEnv, aapDeprovisionTemplateEnv,
-		minimumRequestInterval,
 	)
 	if err != nil {
 		return err
@@ -352,13 +281,11 @@ func targetClusterFromManager(mgr mcmanager.Manager) multicluster.ClusterName {
 // setupClusterControllers registers the ClusterOrder controller and, when grpcConn is set,
 // the cluster Feedback controller.
 func setupClusterControllers(
-	mgr mcmanager.Manager, grpcConn *grpc.ClientConn, minimumRequestInterval time.Duration,
+	mgr mcmanager.Manager, grpcConn *grpc.ClientConn,
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
-	return setupWebhookController(
-		minimumRequestInterval,
-		envClusterCreateWebhook, envClusterDeleteWebhook,
+	return setupProvisioningController(
 		envClusterAAPProvisionTemplate, envClusterAAPDeprovisionTemplate,
 		func() error {
 			if grpcConn == nil {
@@ -385,7 +312,6 @@ func setupClusterControllers(
 func setupComputeInstanceControllers(
 	mgr mcmanager.Manager,
 	grpcConn *grpc.ClientConn,
-	minimumRequestInterval time.Duration,
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
@@ -393,11 +319,7 @@ func setupComputeInstanceControllers(
 	tenantNamespace := os.Getenv(envTenantNamespace)
 	networkingNamespace := os.Getenv(envNetworkingNamespace)
 	targetCluster := targetClusterFromManager(mgr)
-	computeInstanceProvider, statusPollInterval, err := createProviderFromEnv(
-		envComputeInstanceProvisionWebhook, envComputeInstanceDeprovisionWebhook,
-		"", "", // ComputeInstance uses shared AAP templates (no per-resource overrides)
-		minimumRequestInterval,
-	)
+	computeInstanceProvider, statusPollInterval, err := createAAPProviderFromEnv("", "")
 	if err != nil {
 		return fmt.Errorf("create provisioning provider: %w", err)
 	}
@@ -425,9 +347,7 @@ func setupComputeInstanceControllers(
 	return nil
 }
 
-// setupTenantController registers the Tenant controller.
-// For AAP provider, it creates tenant-specific templates (osac-create-org / osac-delete-org).
-// For EDA, tenant provisioning is not supported — the controller waits for a manually-created StorageClass.
+// setupTenantController registers the Tenant controller with AAP storage provisioning templates.
 func setupTenantController(mgr mcmanager.Manager, maxJobHistory int) error {
 	targetCluster := targetClusterFromManager(mgr)
 	tenantNamespace := os.Getenv(envTenantNamespace)
@@ -435,37 +355,24 @@ func setupTenantController(mgr mcmanager.Manager, maxJobHistory int) error {
 	var tenantProvider provisioning.ProvisioningProvider
 	var tenantPollInterval time.Duration
 
-	providerType := provisioning.ProviderType(os.Getenv(envProvisioningProvider))
-	if providerType == "" {
-		providerType = provisioning.ProviderTypeAAP
-	}
+	aapURL := os.Getenv(envAAPURL)
+	aapToken := os.Getenv(envAAPToken)
+	if aapURL != "" && aapToken != "" {
+		tenantProvisionTemplate := helpers.GetEnvWithDefault(envTenantAAPProvisionTemplate, "osac-create-org")
+		tenantDeprovisionTemplate := helpers.GetEnvWithDefault(envTenantAAPDeprovisionTemplate, "osac-delete-org")
+		aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
 
-	switch providerType {
-	case provisioning.ProviderTypeAAP:
-		aapURL := os.Getenv(envAAPURL)
-		aapToken := os.Getenv(envAAPToken)
-		if aapURL != "" && aapToken != "" {
-			tenantProvisionTemplate := helpers.GetEnvWithDefault(envTenantAAPProvisionTemplate, "osac-create-org")
-			tenantDeprovisionTemplate := helpers.GetEnvWithDefault(envTenantAAPDeprovisionTemplate, "osac-delete-org")
-			aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
-
-			var err error
-			tenantProvider, tenantPollInterval, err = createAAPProvider(
-				aapURL, aapToken, tenantProvisionTemplate, tenantDeprovisionTemplate,
-				"", aapInsecureSkipVerify,
-			)
-			if err != nil {
-				return fmt.Errorf("tenant provisioning provider: %w", err)
-			}
-			setupLog.Info("tenant storage provisioning configured",
-				"provisionTemplate", tenantProvisionTemplate,
-				"deprovisionTemplate", tenantDeprovisionTemplate)
+		var err error
+		tenantProvider, tenantPollInterval, err = createAAPProvider(
+			aapURL, aapToken, tenantProvisionTemplate, tenantDeprovisionTemplate,
+			"", aapInsecureSkipVerify,
+		)
+		if err != nil {
+			return fmt.Errorf("tenant provisioning provider: %w", err)
 		}
-	case provisioning.ProviderTypeEDA:
-		setupLog.Info("EDA provider does not support tenant storage provisioning, " +
-			"controller will wait for manual StorageClass creation")
-	default:
-		return fmt.Errorf("unknown provisioning provider type: %s", providerType)
+		setupLog.Info("tenant storage provisioning configured",
+			"provisionTemplate", tenantProvisionTemplate,
+			"deprovisionTemplate", tenantDeprovisionTemplate)
 	}
 
 	if err := (controller.NewTenantReconciler(
@@ -487,7 +394,6 @@ func setupNetworkingControllers(
 	mgr mcmanager.Manager,
 	grpcConn *grpc.ClientConn,
 	maxJobHistory int,
-	minimumRequestInterval time.Duration,
 ) error {
 	localMgr := mgr.GetLocalManager()
 
@@ -518,17 +424,12 @@ func setupNetworkingControllers(
 	// This provider is shared between the PublicIP controller (inline attach/detach, to be
 	// removed in OSAC-836) and the PublicIPAttachment controller.
 	// Poll interval is discarded (_) because we reuse statusPollInterval from the
-	// shared networking setup above. minimumRequestInterval is passed for EDA webhook
-	// rate limiting when OSAC_PROVISIONING_PROVIDER=eda.
-	publicIPAttachmentProvider, _, err := createProvider(
-		provisioning.ProviderType(helpers.GetEnvWithDefault(envProvisioningProvider, string(provisioning.ProviderTypeAAP))),
-		os.Getenv(envPublicIPAttachWebhook), os.Getenv(envPublicIPDetachWebhook),
-		aapURL, aapToken,
-		fmt.Sprintf("%s-attach-public-ip", templatePrefix), fmt.Sprintf("%s-detach-public-ip", templatePrefix),
-		"", // no prefix needed: explicit template names are always used
-		aapInsecureSkipVerify,
-		minimumRequestInterval,
-	)
+	// shared networking setup above.
+	publicIPAttachmentProvider, err := provisioning.NewProvider(provisioning.ProviderConfig{
+		AAPClient:           aapClient,
+		ProvisionTemplate:   fmt.Sprintf("%s-attach-public-ip", templatePrefix),
+		DeprovisionTemplate: fmt.Sprintf("%s-detach-public-ip", templatePrefix),
+	})
 	if err != nil {
 		return fmt.Errorf("publicip attachment provider: %w", err)
 	}
@@ -655,7 +556,6 @@ func main() {
 	var grpcTokenFile string
 	var fulfillmentServerAddress string
 	var remoteClusterKubeconfig string
-	var minimumRequestInterval time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -689,12 +589,6 @@ func main() {
 		"fulfillment-server-address",
 		os.Getenv("OSAC_FULFILLMENT_SERVER_ADDRESS"),
 		"Address of the fulfillment server.",
-	)
-	flag.DurationVar(
-		&minimumRequestInterval,
-		"minimum-request-interval",
-		helpers.GetEnvWithDefault("OSAC_MINIMUM_REQUEST_INTERVAL", time.Duration(0)),
-		"Minimum amount of time between calls to the same webook url",
 	)
 	flag.StringVar(
 		&remoteClusterKubeconfig,
@@ -833,13 +727,13 @@ func main() {
 	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
 
 	if ctrlFlags.Cluster {
-		if err := setupClusterControllers(mgr, grpcConn, minimumRequestInterval, maxJobHistory); err != nil {
+		if err := setupClusterControllers(mgr, grpcConn, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup cluster controllers")
 			os.Exit(1)
 		}
 	}
 	if ctrlFlags.ComputeInstance {
-		if err := setupComputeInstanceControllers(mgr, grpcConn, minimumRequestInterval, maxJobHistory); err != nil {
+		if err := setupComputeInstanceControllers(mgr, grpcConn, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup computeinstance controllers")
 			os.Exit(1)
 		}
@@ -851,7 +745,7 @@ func main() {
 		}
 	}
 	if ctrlFlags.Networking {
-		if err := setupNetworkingControllers(mgr, grpcConn, maxJobHistory, minimumRequestInterval); err != nil {
+		if err := setupNetworkingControllers(mgr, grpcConn, maxJobHistory); err != nil {
 			setupLog.Error(err, "unable to setup networking controllers")
 			os.Exit(1)
 		}
