@@ -95,6 +95,11 @@ spec:
                   - protocol
                   type: object
                 type: array
+              implementationStrategy:
+                description: |-
+                  ImplementationStrategy determines the backend used to enforce security rules.
+                  Set by the fulfillment-service; defaults to network_policy when empty.
+                type: string
               ingressRules:
                 description: IngressRules defines the ingress security rules
                 items:

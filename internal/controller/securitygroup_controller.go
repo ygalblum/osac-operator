@@ -149,26 +149,10 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 		sg.Status.Phase = v1alpha1.SecurityGroupPhaseProgressing
 	}
 
-	// Lookup parent VirtualNetwork by UUID label to get implementation strategy
-	vnetList := &v1alpha1.VirtualNetworkList{}
-	err := r.List(ctx, vnetList,
-		client.InNamespace(sg.Namespace),
-		client.MatchingLabels{osacVirtualNetworkIDLabel: sg.Spec.VirtualNetwork},
-	)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to list VirtualNetworks: %w", err)
-	}
-	if len(vnetList.Items) == 0 {
-		log.Info("parent VirtualNetwork not found, requeueing", "uuid", sg.Spec.VirtualNetwork)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-	vnet := &vnetList.Items[0]
-
-	// Read implementation strategy from parent VirtualNetwork spec
-	implementationStrategy := vnet.Spec.ImplementationStrategy
+	// Read implementation strategy from spec (set by fulfillment-service), fall back to default
+	implementationStrategy := sg.Spec.ImplementationStrategy
 	if implementationStrategy == "" {
-		log.Info("implementation strategy not set on parent VirtualNetwork, requeueing", "virtualNetwork", vnet.Name)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		implementationStrategy = defaultSecurityGroupImplementationStrategy
 	}
 
 	// Add implementation-strategy annotation if not present or different

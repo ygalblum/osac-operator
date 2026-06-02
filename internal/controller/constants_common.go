@@ -42,6 +42,11 @@ const (
 	// Used by PublicIPPool (from its own spec) and PublicIP (inherited from parent pool).
 	defaultPublicIPPoolImplementationStrategy = "metallb-l2"
 
+	// defaultSecurityGroupImplementationStrategy is the implementation strategy for SecurityGroup.
+	// SecurityGroup enforcement uses standard Kubernetes NetworkPolicy, independent of the
+	// VirtualNetwork's NetworkClass.
+	defaultSecurityGroupImplementationStrategy = "network_policy"
+
 	deprovisioningJobTriggeredMessage = "Deprovisioning job triggered"
 
 	conditionReasonConfigurationApplied  = "ConfigurationApplied"

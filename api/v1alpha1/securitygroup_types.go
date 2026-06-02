@@ -76,6 +76,12 @@ type SecurityGroupSpec struct {
 	// +kubebuilder:validation:Type=string
 	VirtualNetwork string `json:"virtualNetwork"`
 
+	// ImplementationStrategy determines the backend used to enforce security rules.
+	// Set by the fulfillment-service; defaults to network_policy when empty.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	ImplementationStrategy string `json:"implementationStrategy,omitempty"`
+
 	// IngressRules defines the ingress security rules
 	// +kubebuilder:validation:Optional
 	IngressRules []SecurityRule `json:"ingressRules,omitempty"`
