@@ -6,33 +6,36 @@ metadata:
   annotations:
     "helm.sh/resource-policy": keep
     controller-gen.kubebuilder.io/version: v0.20.0
-  name: tenants.osac.openshift.io
+  name: publicipattachments.osac.openshift.io
 spec:
   group: osac.openshift.io
   names:
-    kind: Tenant
-    listKind: TenantList
-    plural: tenants
-    singular: tenant
+    kind: PublicIPAttachment
+    listKind: PublicIPAttachmentList
+    plural: publicipattachments
+    shortNames:
+    - publicipattachment
+    singular: publicipattachment
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.namespace
-      name: Tenant Namespace
+    - jsonPath: .spec.publicIP
+      name: PublicIP
       type: string
-    - jsonPath: .status.storageClass
-      name: Storage Class
-      type: string
-    - jsonPath: .status.storageClasses[*].tier
-      name: Storage Tiers
+    - jsonPath: .spec.computeInstance
+      name: ComputeInstance
       type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Tenant is the Schema for the tenants API.
+        description: PublicIPAttachment is the Schema for the publicipattachments
+          API
         properties:
           apiVersion:
             description: |-
@@ -52,14 +55,30 @@ spec:
           metadata:
             type: object
           spec:
-            description: TenantSpec defines the desired state of Tenant.
+            description: spec defines the desired state of PublicIPAttachment
+            properties:
+              computeInstance:
+                description: |-
+                  ComputeInstance is the name of the ComputeInstance to attach to.
+                  Exactly one target field must be set.
+                minLength: 1
+                type: string
+              publicIP:
+                description: PublicIP is the name of the PublicIP resource to attach.
+                minLength: 1
+                type: string
+            required:
+            - publicIP
             type: object
+            x-kubernetes-validations:
+            - message: spec is immutable after creation
+              rule: self == oldSelf
           status:
-            description: TenantStatus defines the observed state of Tenant.
+            description: status defines the observed state of PublicIPAttachment
             properties:
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
-                  the state of the Tenant
+                  the state of the PublicIPAttachment
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -115,9 +134,13 @@ spec:
                   - type
                   type: object
                 type: array
+              desiredConfigVersion:
+                description: DesiredConfigVersion is a hash of the spec, used to detect
+                  spec changes and control retry behavior.
+                type: string
               jobs:
-                description: Jobs holds the history of provisioning jobs triggered
-                  for this tenant
+                description: Jobs holds an array of JobStatus tracking provisioning
+                  and deprovisioning operations
                 items:
                   description: JobStatus represents the status of a provisioning or
                     deprovisioning job
@@ -173,49 +196,18 @@ spec:
                   - type
                   type: object
                 type: array
-              namespace:
-                description: Namespace is the namespace allocated to the tenant on
-                  the target cluster
-                type: string
               phase:
-                description: Phase is the phase of the tenant
+                description: Phase provides a single-value overview of the state of
+                  the PublicIPAttachment
+                enum:
+                - Progressing
+                - Failed
+                - Ready
+                - Deleting
                 type: string
-              storageClass:
-                description: |-
-                  StorageClass is the StorageClass allocated to the tenant on the target cluster.
-                  Deprecated: use StorageClasses instead. Retained for backward compatibility
-                  until all consumers migrate. Will be removed by MGMT-24139.
-                type: string
-              storageClasses:
-                description: |-
-                  StorageClasses lists all resolved StorageClass mappings for the tenant,
-                  one per storage tier.
-                items:
-                  description: |-
-                    ResolvedStorageClass captures a single resolved StorageClass for a specific
-                    storage tier. The Tenant controller populates one entry per tier.
-                  properties:
-                    name:
-                      description: Name is the name of the resolved Kubernetes StorageClass.
-                      minLength: 1
-                      type: string
-                    tier:
-                      description: |-
-                        Tier is the storage tier this StorageClass provides,
-                        taken from the osac.openshift.io/storage-tier label.
-                      maxLength: 63
-                      minLength: 1
-                      pattern: ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$
-                      type: string
-                  required:
-                  - name
-                  - tier
-                  type: object
-                type: array
-                x-kubernetes-list-map-keys:
-                - tier
-                x-kubernetes-list-type: map
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true

@@ -59,12 +59,6 @@ spec:
           spec:
             description: spec defines the desired state of PublicIP
             properties:
-              computeInstance:
-                description: |-
-                  ComputeInstance is the optional name of the ComputeInstance this IP is attached to.
-                  Setting this field triggers attachment of the IP to the referenced instance.
-                minLength: 1
-                type: string
               pool:
                 description: |-
                   Pool is the name of the PublicIPPool this IP is allocated from.
@@ -83,6 +77,10 @@ spec:
               address:
                 description: Address is the allocated public IP address
                 type: string
+              attached:
+                description: Attached indicates whether a PublicIPAttachment has successfully
+                  attached this IP to a target.
+                type: boolean
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
                   the state of the PublicIP
@@ -217,9 +215,6 @@ spec:
                 enum:
                 - Pending
                 - Allocated
-                - Attaching
-                - Attached
-                - Releasing
                 - Failed
                 type: string
             type: object

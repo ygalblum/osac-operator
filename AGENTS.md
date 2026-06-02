@@ -17,6 +17,7 @@ OSAC operator is a Kubernetes operator that reconciles infrastructure resources 
 ## Critical Rules
 
 - **Always `make manifests generate`** after modifying CRD types in `api/v1alpha1/*_types.go`
+- **Always `make helm-crds`** after regenerating CRDs (or run `make check-helm-crds` to verify sync)
 - **Never edit** `config/crd/`, `zz_generated.deepcopy.go`, or `internal/api/` — all generated
 - **Always `buf generate`** after updating the module version in `buf.gen.yaml`
 - **Commit message format**: `MGMT-XXXXX: description of change`

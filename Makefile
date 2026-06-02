@@ -173,19 +173,20 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 .PHONY: helm-crds
 helm-crds: manifests ## Copy generated CRDs into the operator-crds Helm chart.
 	@echo "Syncing CRDs to charts/operator-crds/templates/..."
-	@for f in config/crd/bases/*.yaml; do \
-		name=$$(basename "$$f"); \
-		python3 -c " \
-import sys, re; \
-content = open(sys.argv[1]).read(); \
-if 'helm.sh/resource-policy' not in content: \
-    content = content.replace('  annotations:\n', '  annotations:\n    \"helm.sh/resource-policy\": keep\n'); \
-content = '{{- if .Values.install }}\n' + content + '{{- end }}\n'; \
-open(sys.argv[2], 'w').write(content)" \
-			"$$f" "charts/operator-crds/templates/$$name"; \
-		echo "  $$name"; \
-	done
-	@echo "Done."
+	@python3 hack/sync-helm-crds.py
+
+.PHONY: check-helm-crds
+check-helm-crds: helm-crds ## Verify Helm CRD templates match config/crd/bases.
+	@if ! git diff --quiet -- charts/operator-crds/templates/; then \
+		echo "Helm CRD templates are out of sync with config/crd/bases. Run 'make helm-crds' and commit."; \
+		git diff -- charts/operator-crds/templates/; \
+		exit 1; \
+	fi
+	@if [ -n "$$(git ls-files --others --exclude-standard -- charts/operator-crds/templates/)" ]; then \
+		echo "Missing Helm CRD templates (run 'make helm-crds' and commit):"; \
+		git ls-files --others --exclude-standard -- charts/operator-crds/templates/; \
+		exit 1; \
+	fi
 
 ##@ API Module
 
