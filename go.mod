@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/go-logr/logr v1.4.3
 	github.com/onsi/ginkgo/v2 v2.29.0
-	github.com/onsi/gomega v1.40.0
+	github.com/onsi/gomega v1.41.0
 	github.com/openshift/hypershift/api v0.0.0-20250331235933-616a2fae81ae
 	github.com/osac-project/osac-operator/api v0.0.0
 	github.com/ovn-org/ovn-kubernetes/go-controller v0.0.0-20251211123925-6d83b2b6e183
@@ -21,7 +21,7 @@ require (
 	k8s.io/apiserver v0.36.1
 	k8s.io/client-go v0.36.1
 	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2
-	kubevirt.io/api v1.8.2
+	kubevirt.io/api v1.8.3
 	sigs.k8s.io/controller-runtime v0.24.1
 	sigs.k8s.io/multicluster-runtime v0.24.1
 )
