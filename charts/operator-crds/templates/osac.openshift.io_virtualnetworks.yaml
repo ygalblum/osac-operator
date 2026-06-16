@@ -66,15 +66,15 @@ spec:
                 description: IPv6CIDR is the IPv6 CIDR block for this virtual network
                 type: string
               networkClass:
-                description: NetworkClass is the name of the NetworkClass that defines
-                  implementation strategy
+                description: |-
+                  NetworkClass is the name of the NetworkClass that defines implementation strategy.
+                  When omitted, the platform default NetworkClass is used.
                 type: string
               region:
                 description: Region is the cloud region where this VirtualNetwork
                   will be provisioned
                 type: string
             required:
-            - networkClass
             - region
             type: object
           status:

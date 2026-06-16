@@ -37,10 +37,11 @@ type VirtualNetworkSpec struct {
 	// +kubebuilder:validation:Type=string
 	IPv6CIDR string `json:"ipv6Cidr,omitempty"`
 
-	// NetworkClass is the name of the NetworkClass that defines implementation strategy
-	// +kubebuilder:validation:Required
+	// NetworkClass is the name of the NetworkClass that defines implementation strategy.
+	// When omitted, the platform default NetworkClass is used.
+	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	NetworkClass string `json:"networkClass"`
+	NetworkClass string `json:"networkClass,omitempty"`
 
 	// ImplementationStrategy determines the underlying network backend and Ansible role to use.
 	// This value is derived from the NetworkClass at creation time and stored here for direct
