@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	bmfov1alpha1 "github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
@@ -67,6 +68,75 @@ func (m *mockBareMetalInstancesClient) Signal(_ context.Context, in *privatev1.B
 	}
 	return &privatev1.BareMetalInstancesSignalResponse{}, nil
 }
+
+var _ = Describe("bareMetalInstanceStatusChangedPredicate", func() {
+	var pred = bareMetalInstanceStatusChangedPredicate()
+
+	It("should pass Create events", func() {
+		e := event.CreateEvent{
+			Object: &bmfov1alpha1.BareMetalInstance{},
+		}
+		Expect(pred.Create(e)).To(BeTrue())
+	})
+
+	It("should pass Delete events", func() {
+		e := event.DeleteEvent{
+			Object: &bmfov1alpha1.BareMetalInstance{},
+		}
+		Expect(pred.Delete(e)).To(BeTrue())
+	})
+
+	It("should pass Update events when status phase changes", func() {
+		old := &bmfov1alpha1.BareMetalInstance{}
+		old.Status.Phase = bmfov1alpha1.BareMetalInstancePhaseProgressing
+
+		new := old.DeepCopy()
+		new.Status.Phase = bmfov1alpha1.BareMetalInstancePhaseReady
+
+		e := event.UpdateEvent{ObjectOld: old, ObjectNew: new}
+		Expect(pred.Update(e)).To(BeTrue())
+	})
+
+	It("should pass Update events when status conditions change", func() {
+		old := &bmfov1alpha1.BareMetalInstance{}
+
+		new := old.DeepCopy()
+		new.Status.Conditions = []metav1.Condition{
+			{Type: "Ready", Status: metav1.ConditionTrue, Reason: "AsExpected"},
+		}
+
+		e := event.UpdateEvent{ObjectOld: old, ObjectNew: new}
+		Expect(pred.Update(e)).To(BeTrue())
+	})
+
+	It("should filter Update events when only metadata changes", func() {
+		old := &bmfov1alpha1.BareMetalInstance{}
+		old.Status.Phase = bmfov1alpha1.BareMetalInstancePhaseProgressing
+
+		new := old.DeepCopy()
+		new.Annotations = map[string]string{"foo": "bar"}
+
+		e := event.UpdateEvent{ObjectOld: old, ObjectNew: new}
+		Expect(pred.Update(e)).To(BeFalse())
+	})
+
+	It("should filter Update events when only spec changes", func() {
+		old := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				HostType:       "default",
+				ExternalHostID: "ext-1",
+				TemplateID:     "tpl-1",
+			},
+		}
+		old.Status.Phase = bmfov1alpha1.BareMetalInstancePhaseProgressing
+
+		new := old.DeepCopy()
+		new.Spec.RunStrategy = bmfov1alpha1.RunStrategyAlways
+
+		e := event.UpdateEvent{ObjectOld: old, ObjectNew: new}
+		Expect(pred.Update(e)).To(BeFalse())
+	})
+})
 
 var _ = Describe("BareMetalInstanceFeedbackReconciler", func() {
 	const (
@@ -228,19 +298,6 @@ var _ = Describe("BareMetalInstanceFeedbackReconciler", func() {
 			Expect(mockClient.signalID).To(Equal(bmiID))
 		})
 
-		It("should call Signal on every reconcile", func() {
-			request := reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}
-
-			_, err := reconciler.Reconcile(ctx, request)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(mockClient.signalCount).To(Equal(1))
-
-			_, err = reconciler.Reconcile(ctx, request)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(mockClient.signalCount).To(Equal(2))
-		})
 	})
 
 	Context("When reconciling a resource being deleted with feedback finalizer as last", func() {

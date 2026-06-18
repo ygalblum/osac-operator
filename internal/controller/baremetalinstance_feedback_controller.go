@@ -18,11 +18,13 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -58,6 +60,23 @@ func BareMetalInstanceNamespacePredicate(namespace string) predicate.Predicate {
 	)
 }
 
+// bareMetalInstanceStatusChangedPredicate filters Update events to only those
+// where the BareMetalInstance status has changed, avoiding unnecessary Signal
+// calls for metadata-only or spec-only changes. Create and Delete events are
+// always passed through.
+func bareMetalInstanceStatusChangedPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldObj, oldOk := e.ObjectOld.(*bmfov1alpha1.BareMetalInstance)
+			newObj, newOk := e.ObjectNew.(*bmfov1alpha1.BareMetalInstance)
+			if !oldOk || !newOk {
+				return true
+			}
+			return !equality.Semantic.DeepEqual(oldObj.Status, newObj.Status)
+		},
+	}
+}
+
 // SetupWithManager adds the reconciler to the controller manager.
 func (r *BareMetalInstanceFeedbackReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	localMgr := mgr.GetLocalManager()
@@ -67,7 +86,10 @@ func (r *BareMetalInstanceFeedbackReconciler) SetupWithManager(mgr mcmanager.Man
 
 	return ctrl.NewControllerManagedBy(localMgr).
 		Named("baremetalinstance-feedback").
-		For(&bmfov1alpha1.BareMetalInstance{}, builder.WithPredicates(BareMetalInstanceNamespacePredicate(r.bareMetalInstanceNamespace))).
+		For(&bmfov1alpha1.BareMetalInstance{}, builder.WithPredicates(
+			BareMetalInstanceNamespacePredicate(r.bareMetalInstanceNamespace),
+			bareMetalInstanceStatusChangedPredicate(),
+		)).
 		Complete(r)
 }
 
