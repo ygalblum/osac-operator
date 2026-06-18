@@ -177,7 +177,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						osacTenantKey: "test-tenant",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -242,7 +242,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						osacTenantKey: "test-tenant",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -288,7 +288,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					// AAP Direct uses base finalizer, not AAP-specific finalizer
 					Finalizers: []string{osacComputeInstanceFinalizer},
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						osacTenantKey: "test-tenant",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -329,7 +329,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						osacTenantKey: "test-tenant",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -368,7 +368,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 					Name:      instanceName,
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacTenantAnnotation: "test-tenant",
+						osacTenantKey: "test-tenant",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),

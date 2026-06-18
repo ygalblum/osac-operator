@@ -191,7 +191,7 @@ func ComputeInstanceNamespacePredicate(namespace string) predicate.Predicate {
 }
 
 // tenantAnnotationIndexField is the field path used for cache index and List MatchingFields.
-var tenantAnnotationIndexField = fmt.Sprintf("metadata.annotations.%s", osacTenantAnnotation)
+var tenantAnnotationIndexField = fmt.Sprintf("metadata.annotations.%s", osacTenantKey)
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ComputeInstanceReconciler) SetupWithManager(mgr mcmanager.Manager) error {
@@ -201,7 +201,7 @@ func (r *ComputeInstanceReconciler) SetupWithManager(mgr mcmanager.Manager) erro
 	localMgr := mgr.GetLocalManager()
 	if err := localMgr.GetFieldIndexer().IndexField(ctx, &v1alpha1.ComputeInstance{}, tenantAnnotationIndexField,
 		func(obj client.Object) []string {
-			if v, ok := obj.GetAnnotations()[osacTenantAnnotation]; ok {
+			if v, ok := obj.GetAnnotations()[osacTenantKey]; ok {
 				return []string{v}
 			}
 			return nil
@@ -714,7 +714,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	// Get the tenant (on local cluster)
 	tenant, err := r.getTenant(ctx, instance)
 	if err != nil {
-		tenantName := instance.GetAnnotations()[osacTenantAnnotation]
+		tenantName := instance.GetAnnotations()[osacTenantKey]
 		log.Info("tenant does not exist or is being deleted, requeueing", "tenant", tenantName)
 		return ctrl.Result{}, err
 	}

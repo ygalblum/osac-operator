@@ -70,7 +70,7 @@ type StorageReconciler struct {
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// Secrets RBAC is scoped to osac-system via a namespaced Role (config/rbac/storage_secrets_role.yaml)
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
@@ -216,7 +216,7 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 			condMsg)
 
 		if r.ClusterStorageProvider != nil && reason == v1alpha1.TenantReasonNotFound {
-			return r.handleClassProvisioning(ctx, instance)
+			return r.handleClusterStorageProvisioning(ctx, instance)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -230,7 +230,7 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 	// Poll any non-terminal class provision job before declaring complete
 	latestClassJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeClusterStorageProvision)
 	if latestClassJob != nil && !latestClassJob.State.IsTerminal() && r.ClusterStorageProvider != nil {
-		return r.pollClassProvisionJob(ctx, instance, latestClassJob)
+		return r.pollClusterStorageProvisionJob(ctx, instance, latestClassJob)
 	}
 
 	return ctrl.Result{}, nil
@@ -249,7 +249,7 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, instance *v1alpha1
 	classCleanupDone := classDeprovJob != nil && classDeprovJob.State.IsTerminal() && classDeprovJob.State.IsSuccessful()
 
 	if !classCleanupDone {
-		result, err := r.handleClassDeprovisioning(ctx, instance)
+		result, err := r.handleClusterStorageDeprovisioning(ctx, instance)
 		if err != nil {
 			return result, err
 		}
@@ -290,7 +290,7 @@ func (r *StorageReconciler) handleBackendProvisioning(ctx context.Context, insta
 		return ctrl.Result{}, nil
 	}
 
-	if needsProvisionJob(latestJob) {
+	if provisioning.NeedsProvisionJob(latestJob) {
 		log.Info("triggering backend provisioning", "provider", r.BackendProvider.Name())
 		result, err := r.BackendProvider.TriggerProvision(ctx, instance)
 		if err != nil {
@@ -358,9 +358,9 @@ func (r *StorageReconciler) pollBackendProvisionJob(ctx context.Context, instanc
 	return ctrl.Result{}, nil
 }
 
-// --- Stage 2: Class provisioning ---
+// --- Stage 2: Cluster storage provisioning ---
 
-func (r *StorageReconciler) handleClassProvisioning(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {
+func (r *StorageReconciler) handleClusterStorageProvisioning(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	latestJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeClusterStorageProvision)
@@ -371,7 +371,7 @@ func (r *StorageReconciler) handleClassProvisioning(ctx context.Context, instanc
 		return ctrl.Result{}, nil
 	}
 
-	if needsProvisionJob(latestJob) {
+	if provisioning.NeedsProvisionJob(latestJob) {
 		log.Info("triggering class provisioning", "provider", r.ClusterStorageProvider.Name())
 		result, err := r.ClusterStorageProvider.TriggerProvision(ctx, instance)
 		if err != nil {
@@ -405,10 +405,10 @@ func (r *StorageReconciler) handleClassProvisioning(ctx context.Context, instanc
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
-	return r.pollClassProvisionJob(ctx, instance, latestJob)
+	return r.pollClusterStorageProvisionJob(ctx, instance, latestJob)
 }
 
-func (r *StorageReconciler) pollClassProvisionJob(ctx context.Context, instance *v1alpha1.Tenant, latestJob *v1alpha1.JobStatus) (ctrl.Result, error) {
+func (r *StorageReconciler) pollClusterStorageProvisionJob(ctx context.Context, instance *v1alpha1.Tenant, latestJob *v1alpha1.JobStatus) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	status, err := r.ClusterStorageProvider.GetProvisionStatus(ctx, instance, latestJob.JobID)
@@ -441,7 +441,7 @@ func (r *StorageReconciler) pollClassProvisionJob(ctx context.Context, instance 
 
 // --- Deprovisioning ---
 
-func (r *StorageReconciler) handleClassDeprovisioning(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {
+func (r *StorageReconciler) handleClusterStorageDeprovisioning(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	if r.ClusterStorageProvider == nil {
@@ -617,7 +617,7 @@ func (r *StorageReconciler) hubSecretExists(ctx context.Context, tenantName stri
 	var secretList corev1.SecretList
 	if err := r.List(ctx, &secretList,
 		client.InNamespace(storageConfigNamespace()),
-		client.MatchingLabels{osacTenantAnnotation: tenantName},
+		client.MatchingLabels{osacTenantKey: tenantName},
 	); err != nil {
 		return false, err
 	}
@@ -631,22 +631,12 @@ func storageConfigNamespace() string {
 	return "osac-system"
 }
 
-func needsProvisionJob(latestJob *v1alpha1.JobStatus) bool {
-	if latestJob == nil || latestJob.JobID == "" {
-		return true
-	}
-	if latestJob.State == v1alpha1.JobStateFailed {
-		return false
-	}
-	return latestJob.State.IsSuccessful()
-}
-
 // --- Watch mapping ---
 
 func (r *StorageReconciler) mapStorageClassToTenant(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrllog.FromContext(ctx)
 
-	tenantName, exists := obj.GetLabels()[osacTenantAnnotation]
+	tenantName, exists := obj.GetLabels()[osacTenantKey]
 	if !exists || tenantName == "" {
 		return nil
 	}
@@ -670,7 +660,7 @@ func (r *StorageReconciler) mapStorageClassToTenant(ctx context.Context, obj cli
 }
 
 func (r *StorageReconciler) mapSecretToTenant(ctx context.Context, obj client.Object) []reconcile.Request {
-	tenantName, exists := obj.GetLabels()[osacTenantAnnotation]
+	tenantName, exists := obj.GetLabels()[osacTenantKey]
 	if !exists || tenantName == "" {
 		return nil
 	}
@@ -701,6 +691,7 @@ func (r *StorageReconciler) allTenantReconcileRequests(ctx context.Context) []re
 	return requests
 }
 
+// TODO(OSAC-1123): implement ClusterOrder-to-Tenant mapping when CaaS defines the association
 func (r *StorageReconciler) mapClusterOrderToTenant(_ context.Context, _ client.Object) []reconcile.Request {
 	return nil
 }
@@ -734,7 +725,7 @@ func secretTenantPredicate() predicate.Predicate {
 		if obj.GetNamespace() != storageConfigNamespace() {
 			return false
 		}
-		_, exists := obj.GetLabels()[osacTenantAnnotation]
+		_, exists := obj.GetLabels()[osacTenantKey]
 		return exists
 	})
 }

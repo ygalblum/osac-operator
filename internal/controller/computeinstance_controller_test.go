@@ -111,7 +111,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						Name:      resourceName,
 						Namespace: namespaceName,
 						Annotations: map[string]string{
-							osacTenantAnnotation: tenantName,
+							osacTenantKey: tenantName,
 						},
 					},
 					Spec: newTestComputeInstanceSpec("test_template"),
@@ -195,7 +195,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Namespace: namespaceName,
 					Annotations: map[string]string{
 						osacComputeInstanceManagementStateAnnotation: ManagementStateUnmanaged,
-						osacTenantAnnotation:                         tenantName,
+						osacTenantKey: tenantName,
 					},
 					Finalizers: []string{osacComputeInstanceFinalizer},
 				},
@@ -1016,7 +1016,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -1057,7 +1057,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -1108,7 +1108,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -1522,7 +1522,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -1581,7 +1581,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -1699,7 +1699,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -1767,7 +1767,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -1821,7 +1821,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -1874,7 +1874,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -1928,7 +1928,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -2114,7 +2114,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: spec,
@@ -2155,7 +2155,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: spec,
@@ -2213,7 +2213,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: spec,
@@ -2274,7 +2274,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation:                tenantName,
+						osacTenantKey:                       tenantName,
 						osacSubnetTargetNamespaceAnnotation: subnetRef, // already correct
 					},
 				},
@@ -2323,7 +2323,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
@@ -2634,7 +2634,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 					Name:      resourceName,
 					Namespace: namespaceName,
 					Annotations: map[string]string{
-						osacTenantAnnotation: tenantName,
+						osacTenantKey: tenantName,
 					},
 				},
 				Spec: spec,
@@ -2893,7 +2893,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 						osacComputeInstanceIDLabel: mapCIUUID,
 					},
 					Annotations: map[string]string{
-						osacTenantAnnotation: "dummy",
+						osacTenantKey: "dummy",
 					},
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),

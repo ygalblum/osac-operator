@@ -48,8 +48,9 @@ var (
 	// osacProjectRefLabel is the label used to reference the project in which the tenant obehct lives
 	osacProjectRefLabel string = fmt.Sprintf("%s/project", osacPrefix)
 
-	// osacTenantAnnotation is the annotation used to reference the tenant name
-	osacTenantAnnotation string = fmt.Sprintf("%s/tenant", osacPrefix)
+	// osacTenantKey is the key used to associate resources with a tenant.
+	// Used as a label on StorageClasses/Secrets and as an annotation on ComputeInstances.
+	osacTenantKey string = fmt.Sprintf("%s/tenant", osacPrefix)
 
 	// osacStorageTierLabel is the label key that identifies the storage tier of a StorageClass
 	osacStorageTierLabel string = fmt.Sprintf("%s/storage-tier", osacPrefix)
@@ -81,7 +82,7 @@ func tenantLabelSelector(project string) metav1.LabelSelector {
 
 func storageClassTenantPredicate() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
-		_, exists := obj.GetLabels()[osacTenantAnnotation]
+		_, exists := obj.GetLabels()[osacTenantKey]
 		return exists
 	})
 }

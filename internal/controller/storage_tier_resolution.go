@@ -74,12 +74,12 @@ func getTenantStorageClasses(ctx context.Context, targetClient client.Client, te
 	log := ctrllog.FromContext(ctx)
 
 	tenantSCList := &storagev1.StorageClassList{}
-	if err := targetClient.List(ctx, tenantSCList, client.MatchingLabels{osacTenantAnnotation: tenantName}); err != nil {
+	if err := targetClient.List(ctx, tenantSCList, client.MatchingLabels{osacTenantKey: tenantName}); err != nil {
 		return tierResolutionResult{}, err
 	}
 
 	defaultSCList := &storagev1.StorageClassList{}
-	if err := targetClient.List(ctx, defaultSCList, client.MatchingLabels{osacTenantAnnotation: defaultStorageClassSentinel}); err != nil {
+	if err := targetClient.List(ctx, defaultSCList, client.MatchingLabels{osacTenantKey: defaultStorageClassSentinel}); err != nil {
 		return tierResolutionResult{}, err
 	}
 
