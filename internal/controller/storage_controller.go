@@ -214,6 +214,7 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 			metav1.ConditionFalse,
 			reason,
 			condMsg)
+		instance.Status.StorageClasses = nil
 
 		if r.ClusterStorageProvider != nil && reason == v1alpha1.TenantReasonNotFound {
 			return r.handleClusterStorageProvisioning(ctx, instance)

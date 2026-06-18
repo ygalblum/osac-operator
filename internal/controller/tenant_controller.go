@@ -44,7 +44,7 @@ import (
 const tenantFinalizer = "osac.openshift.io/tenant"
 
 // TenantReconciler reconciles a Tenant object.
-// Manages namespace creation, UDN reconciliation, and tenant lifecycle.
+// Tracks namespace readiness and tenant lifecycle (Phase, finalizer).
 // Storage provisioning is handled by the OSAC Storage Controller.
 type TenantReconciler struct {
 	client.Client

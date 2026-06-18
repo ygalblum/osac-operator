@@ -92,6 +92,9 @@ func createLabeledStorageClass(ctx context.Context, name, tenant, tier string) {
 		Provisioner: "kubernetes.io/no-provisioner",
 	}
 	Expect(k8sClient.Create(ctx, sc)).To(Succeed())
+	DeferCleanup(func() {
+		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, sc))).To(Succeed())
+	})
 }
 
 var _ = Describe("Storage Controller", func() {
@@ -396,6 +399,13 @@ var _ = Describe("Storage Controller", func() {
 			Eventually(func(g Gomega) {
 				_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
 				g.Expect(err).NotTo(HaveOccurred())
+
+				t := &v1alpha1.Tenant{}
+				err = k8sClient.Get(ctx, nn, t)
+				g.Expect(client.IgnoreNotFound(err)).To(Succeed())
+				if err == nil {
+					g.Expect(t.Finalizers).NotTo(ContainElement(storageFinalizer))
+				}
 			}).Should(Succeed())
 		})
 	})
