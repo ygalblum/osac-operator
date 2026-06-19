@@ -559,7 +559,7 @@ var _ = Describe("AAPProvider", func() {
 					return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
 				}
 				instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
-				instance.Status.Jobs = []v1alpha1.JobStatus{
+				instance.Status.ProvisioningJobs = []v1alpha1.JobStatus{
 					{
 						JobID:     "9876",
 						Type:      v1alpha1.JobTypeProvision,
@@ -600,7 +600,7 @@ var _ = Describe("AAPProvider", func() {
 					return &aap.LaunchJobTemplateResponse{JobID: 999}, nil
 				}
 				instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
-				instance.Status.Jobs = []v1alpha1.JobStatus{
+				instance.Status.ProvisioningJobs = []v1alpha1.JobStatus{
 					{
 						JobID:     "9876",
 						Type:      v1alpha1.JobTypeProvision,

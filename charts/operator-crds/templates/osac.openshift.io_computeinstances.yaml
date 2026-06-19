@@ -339,9 +339,29 @@ spec:
                   IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
                   Populated when the instance is ready (phase Running).
                 type: string
-              jobs:
+              lastRestartedAt:
                 description: |-
-                  Jobs tracks the history of provision and deprovision operations
+                  LastRestartedAt records when the last restart was initiated by the controller.
+
+                  This is set to spec.restartRequestedAt when the controller processes a restart request.
+                  It will be empty if no restart has been performed yet.
+                format: date-time
+                type: string
+              phase:
+                description: Phase provides a single-value overview of the state of
+                  the ComputeInstance
+                enum:
+                - Starting
+                - Running
+                - Failed
+                - Deleting
+                - Stopping
+                - Stopped
+                - Paused
+                type: string
+              provisioningJobs:
+                description: |-
+                  ProvisioningJobs tracks the history of provision and deprovision operations
                   Ordered chronologically, with latest operations at the end
                   Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
                 items:
@@ -388,10 +408,6 @@ spec:
                       enum:
                       - provision
                       - deprovision
-                      - storage-backend-provision
-                      - storage-backend-deprovision
-                      - cluster-storage-provision
-                      - cluster-storage-deprovision
                       type: string
                   required:
                   - jobID
@@ -400,26 +416,6 @@ spec:
                   - type
                   type: object
                 type: array
-              lastRestartedAt:
-                description: |-
-                  LastRestartedAt records when the last restart was initiated by the controller.
-
-                  This is set to spec.restartRequestedAt when the controller processes a restart request.
-                  It will be empty if no restart has been performed yet.
-                format: date-time
-                type: string
-              phase:
-                description: Phase provides a single-value overview of the state of
-                  the ComputeInstance
-                enum:
-                - Starting
-                - Running
-                - Failed
-                - Deleting
-                - Stopping
-                - Stopped
-                - Paused
-                type: string
               publicIPAddress:
                 description: |-
                   PublicIPAddress is the public IP address attached to this instance via a PublicIP CR.

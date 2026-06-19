@@ -86,9 +86,9 @@ type VirtualNetworkStatus struct {
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
 
-	// Jobs holds an array of JobStatus tracking provisioning and deprovisioning operations
+	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
 	// BackendNetworkID stores provider-specific network identifier
 	// +kubebuilder:validation:Optional
@@ -137,4 +137,3 @@ type VirtualNetworkList struct {
 func (v *VirtualNetwork) GetName() string {
 	return v.ObjectMeta.Name
 }
-

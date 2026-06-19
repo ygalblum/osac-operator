@@ -473,7 +473,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	}
 
 	// Check if we already have a deprovision job
-	latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
+	latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, v1alpha1.JobTypeDeprovision)
 
 	// Trigger deprovisioning - provider decides internally if ready
 	if !provisioning.HasJobID(latestDeprovisionJob) {
@@ -499,12 +499,12 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 			// Provider not ready yet (e.g., canceling provision job)
 			// Update provision job status if provider returned one (e.g., cancellation in progress)
 			if result.ProvisionJobStatus != nil {
-				latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+				latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
 				if latestProvisionJob != nil {
 					updatedJob := *latestProvisionJob
 					updatedJob.State = result.ProvisionJobStatus.State
 					updatedJob.Message = result.ProvisionJobStatus.Message
-					provisioning.UpdateJob(instance.Status.Jobs, updatedJob)
+					provisioning.UpdateJob(instance.Status.ProvisioningJobs, updatedJob)
 					log.Info("updated provision job status while waiting for deprovision", "state", result.ProvisionJobStatus.State, "message", result.ProvisionJobStatus.Message)
 				}
 			}
@@ -520,12 +520,12 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 			// Deprovision started successfully
 			// Update provision job status if provider returned one (job was terminal before deprovision)
 			if result.ProvisionJobStatus != nil {
-				latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
+				latestProvisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
 				if latestProvisionJob != nil {
 					updatedJob := *latestProvisionJob
 					updatedJob.State = result.ProvisionJobStatus.State
 					updatedJob.Message = result.ProvisionJobStatus.Message
-					provisioning.UpdateJob(instance.Status.Jobs, updatedJob)
+					provisioning.UpdateJob(instance.Status.ProvisioningJobs, updatedJob)
 					log.Info("updated provision job status before starting deprovision", "state", result.ProvisionJobStatus.State, "message", result.ProvisionJobStatus.Message)
 				}
 			}
@@ -537,7 +537,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 				Message:                deprovisioningJobTriggeredMessage,
 				BlockDeletionOnFailure: result.BlockDeletionOnFailure,
 			}
-			instance.Status.Jobs = provisioning.AppendJob(instance.Status.Jobs, newJob, r.MaxJobHistory)
+			instance.Status.ProvisioningJobs = provisioning.AppendJob(instance.Status.ProvisioningJobs, newJob, r.MaxJobHistory)
 			log.Info("deprovisioning job triggered", "jobID", result.JobID)
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 		}
@@ -549,7 +549,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 		log.Error(err, "failed to get deprovision job status", "jobID", latestDeprovisionJob.JobID)
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
-		provisioning.UpdateJob(instance.Status.Jobs, updatedJob)
+		provisioning.UpdateJob(instance.Status.ProvisioningJobs, updatedJob)
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
@@ -557,7 +557,7 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	updatedJob := *latestDeprovisionJob
 	updatedJob.State = status.State
 	updatedJob.Message = status.MessageWithDetails()
-	provisioning.UpdateJob(instance.Status.Jobs, updatedJob)
+	provisioning.UpdateJob(instance.Status.ProvisioningJobs, updatedJob)
 
 	// If job is still running, requeue
 	if !status.State.IsTerminal() {
@@ -769,7 +769,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
-	if provisioning.IsConfigApplied(&instance.Status.Jobs, instance.Status.DesiredConfigVersion) {
+	if provisioning.IsConfigApplied(&instance.Status.ProvisioningJobs, instance.Status.DesiredConfigVersion) {
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
 		// Update lastRestartedAt when a restart was requested and provisioning has reconciled it.
@@ -1139,7 +1139,7 @@ func determinePhaseFromPrintableStatus(ctx context.Context, kv *kubevirtv1.Virtu
 
 func (r *ComputeInstanceReconciler) provisionState(instance *v1alpha1.ComputeInstance) *provisioning.State {
 	return &provisioning.State{
-		Jobs:                 &instance.Status.Jobs,
+		Jobs:                 &instance.Status.ProvisioningJobs,
 		DesiredConfigVersion: instance.Status.DesiredConfigVersion,
 	}
 }

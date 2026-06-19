@@ -142,7 +142,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(result.RequeueAfter).To(BeZero())
 
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			Expect(tenant.Status.Jobs).To(BeEmpty())
+			Expect(tenant.Status.ProvisioningJobs).To(BeEmpty())
 			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
 			Expect(cond).To(BeNil())
 		})
@@ -165,9 +165,9 @@ var _ = Describe("Storage Controller", func() {
 
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			Expect(tenant.Status.Jobs).To(HaveLen(1))
-			Expect(tenant.Status.Jobs[0].Type).To(Equal(v1alpha1.JobTypeStorageBackendProvision))
-			Expect(tenant.Status.Jobs[0].JobID).To(Equal("mock-job-id"))
+			Expect(tenant.Status.StorageBackendJobs).To(HaveLen(1))
+			Expect(tenant.Status.StorageBackendJobs[0].Type).To(Equal(v1alpha1.JobTypeProvision))
+			Expect(tenant.Status.StorageBackendJobs[0].JobID).To(Equal("mock-job-id"))
 
 			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
 			Expect(cond).NotTo(BeNil())
@@ -218,7 +218,7 @@ var _ = Describe("Storage Controller", func() {
 			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal("NoProvider"))
+			Expect(cond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
 		})
 
 		It("should record failed provisioning job", func() {
@@ -242,9 +242,9 @@ var _ = Describe("Storage Controller", func() {
 
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			Expect(tenant.Status.Jobs).To(HaveLen(1))
-			Expect(tenant.Status.Jobs[0].State).To(Equal(v1alpha1.JobStateFailed))
-			Expect(tenant.Status.Jobs[0].Message).To(ContainSubstring("AAP unreachable"))
+			Expect(tenant.Status.StorageBackendJobs).To(HaveLen(1))
+			Expect(tenant.Status.StorageBackendJobs[0].State).To(Equal(v1alpha1.JobStateFailed))
+			Expect(tenant.Status.StorageBackendJobs[0].Message).To(ContainSubstring("AAP unreachable"))
 		})
 	})
 
@@ -273,8 +273,8 @@ var _ = Describe("Storage Controller", func() {
 			Expect(backendCond).NotTo(BeNil())
 			Expect(backendCond.Status).To(Equal(metav1.ConditionTrue))
 
-			Expect(tenant.Status.Jobs).To(HaveLen(1))
-			Expect(tenant.Status.Jobs[0].Type).To(Equal(v1alpha1.JobTypeClusterStorageProvision))
+			Expect(tenant.Status.ClusterStorageJobs).To(HaveLen(1))
+			Expect(tenant.Status.ClusterStorageJobs[0].Type).To(Equal(v1alpha1.JobTypeProvision))
 		})
 
 		It("should set ClusterStorageReady=True when SCs are discovered", func() {
@@ -446,8 +446,138 @@ var _ = Describe("Storage Controller", func() {
 			Expect(result.RequeueAfter).To(BeZero())
 
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			Expect(tenant.Status.Jobs).To(BeEmpty())
+			Expect(tenant.Status.ProvisioningJobs).To(BeEmpty())
+			Expect(tenant.Status.StorageBackendJobs).To(BeEmpty())
+			Expect(tenant.Status.ClusterStorageJobs).To(BeEmpty())
 			Expect(tenant.Finalizers).NotTo(ContainElement(storageFinalizer))
+		})
+	})
+
+	Context("Job array isolation", func() {
+		It("should place backend jobs in StorageBackendJobs array", func() {
+			name := "storage-test-backend-array"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			provider := &mockProvisioningProvider{}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				provider, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Status.StorageBackendJobs).To(HaveLen(1))
+			Expect(tenant.Status.StorageBackendJobs[0].Type).To(Equal(v1alpha1.JobTypeProvision))
+			Expect(tenant.Status.ProvisioningJobs).To(BeEmpty())
+			Expect(tenant.Status.ClusterStorageJobs).To(BeEmpty())
+		})
+
+		It("should place cluster storage jobs in ClusterStorageJobs array", func() {
+			name := "storage-test-cs-array"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+
+			clusterProvider := &mockProvisioningProvider{name: "cluster-storage-mock"}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Status.ClusterStorageJobs).To(HaveLen(1))
+			Expect(tenant.Status.ClusterStorageJobs[0].Type).To(Equal(v1alpha1.JobTypeProvision))
+			Expect(tenant.Status.ProvisioningJobs).To(BeEmpty())
+			Expect(tenant.Status.StorageBackendJobs).To(BeEmpty())
+		})
+	})
+
+	Context("Cluster storage failure", func() {
+		It("should record failed cluster storage provisioning job", func() {
+			name := "storage-test-cs-fail"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-storage-mock",
+				triggerProvisionFunc: func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+					return nil, fmt.Errorf("cluster storage template not found")
+				},
+			}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Status.ClusterStorageJobs).To(HaveLen(1))
+			Expect(tenant.Status.ClusterStorageJobs[0].State).To(Equal(v1alpha1.JobStateFailed))
+			Expect(tenant.Status.ClusterStorageJobs[0].Message).To(ContainSubstring("cluster storage template not found"))
+		})
+	})
+
+	Context("Backend condition transition", func() {
+		It("should transition StorageBackendReady from True to False when hub Secret disappears", func() {
+			name := "storage-test-backend-transition"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+
+			secret := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      fmt.Sprintf("vast-tenant-config-%s", name),
+				Namespace: secretsNamespace,
+			}, secret)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+
+			provider := &mockProvisioningProvider{}
+			r2 := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				provider, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+				_, err := r2.Reconcile(ctx, storageReconcileRequest(nn))
+				g.Expect(err).NotTo(HaveOccurred())
+
+				g.Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+				cond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+				g.Expect(cond).NotTo(BeNil())
+				g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 	})
 })

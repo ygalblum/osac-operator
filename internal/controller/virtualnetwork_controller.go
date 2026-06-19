@@ -179,7 +179,7 @@ func (r *VirtualNetworkReconciler) handleUpdate(ctx context.Context, vnet *v1alp
 	// Set phase to Progressing only on first provision (empty phase) or when spec changed
 	// after a previous success. Don't override Failed during backoff.
 	if vnet.Status.Phase == "" || (vnet.Status.Phase == v1alpha1.VirtualNetworkPhaseReady &&
-		!provisioning.IsConfigApplied(&vnet.Status.Jobs, vnet.Status.DesiredConfigVersion)) {
+		!provisioning.IsConfigApplied(&vnet.Status.ProvisioningJobs, vnet.Status.DesiredConfigVersion)) {
 		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseProgressing
 	}
 
@@ -196,7 +196,7 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 	}
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
-		&provisioning.State{Jobs: &vnet.Status.Jobs, DesiredConfigVersion: vnet.Status.DesiredConfigVersion},
+		&provisioning.State{Jobs: &vnet.Status.ProvisioningJobs, DesiredConfigVersion: vnet.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
 			OnFailed:  func(_ string) { vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed },
@@ -252,7 +252,7 @@ func (r *VirtualNetworkReconciler) handleDeprovisioning(ctx context.Context, vne
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
-		&vnet.Status.Jobs, r.MaxJobHistory, r.StatusPollInterval)
+		&vnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
 	if err != nil || !done {
 		return result, err
 	}

@@ -249,7 +249,7 @@ func (r *PublicIPAttachmentReconciler) handleUpdate(ctx context.Context, attachm
 	})
 
 	if attachment.Status.Phase == "" || (attachment.Status.Phase == v1alpha1.PublicIPAttachmentPhaseReady &&
-		!provisioning.IsConfigApplied(&attachment.Status.Jobs, attachment.Status.DesiredConfigVersion)) {
+		!provisioning.IsConfigApplied(&attachment.Status.ProvisioningJobs, attachment.Status.DesiredConfigVersion)) {
 		attachment.Status.Phase = v1alpha1.PublicIPAttachmentPhaseProgressing
 	}
 
@@ -317,7 +317,7 @@ func (r *PublicIPAttachmentReconciler) handleProvisioning(
 	}
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, attachment,
-		&provisioning.State{Jobs: &attachment.Status.Jobs, DesiredConfigVersion: attachment.Status.DesiredConfigVersion},
+		&provisioning.State{Jobs: &attachment.Status.ProvisioningJobs, DesiredConfigVersion: attachment.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
 			OnFailed: func(_ string) { attachment.Status.Phase = v1alpha1.PublicIPAttachmentPhaseFailed },
@@ -498,7 +498,7 @@ func (r *PublicIPAttachmentReconciler) handleDeprovisioning(ctx context.Context,
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, attachment,
-		&attachment.Status.Jobs, r.MaxJobHistory, r.StatusPollInterval)
+		&attachment.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
 	if err != nil || !done {
 		return result, err
 	}

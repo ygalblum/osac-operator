@@ -187,7 +187,7 @@ var _ = Describe("SubnetReconciler", func() {
 			// Verify the job was persisted to the API server
 			updatedSubnet := &osacv1alpha1.Subnet{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, updatedSubnet)).To(Succeed())
-			latestJob := provisioning.FindLatestJobByType(updatedSubnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(updatedSubnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
 		})
@@ -355,7 +355,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("test-job-123"))
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStatePending))
@@ -363,7 +363,7 @@ var _ = Describe("SubnetReconciler", func() {
 
 		It("should trigger new job when previous job failed", func() {
 			subnet.Status.DesiredConfigVersion = testConfigVersionNew
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "old-failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -386,14 +386,14 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("new-job-456"))
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStatePending))
 		})
 
 		It("should poll job status when job exists", func() {
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "existing-job-789",
 					Type:      osacv1alpha1.JobTypeProvision,
@@ -415,12 +415,12 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStateRunning))
 		})
 
 		It("should set phase to Ready when job succeeds", func() {
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "success-job-101",
 					Type:      osacv1alpha1.JobTypeProvision,
@@ -445,7 +445,7 @@ var _ = Describe("SubnetReconciler", func() {
 		})
 
 		It("should set phase to Failed when job fails", func() {
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "failed-job-202",
 					Type:      osacv1alpha1.JobTypeProvision,
@@ -473,7 +473,7 @@ var _ = Describe("SubnetReconciler", func() {
 	Context("backoff on failure", func() {
 		It("should backoff when latest job failed with matching ConfigVersion", func() {
 			subnet.Status.DesiredConfigVersion = testConfigVersion
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -492,7 +492,7 @@ var _ = Describe("SubnetReconciler", func() {
 
 		It("should skip when config already applied", func() {
 			subnet.Status.DesiredConfigVersion = testConfigVersion
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "succeeded-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -521,14 +521,14 @@ var _ = Describe("SubnetReconciler", func() {
 					State:     osacv1alpha1.JobStatePending,
 					Message:   "Job triggered",
 				}
-				subnet.Status.Jobs = provisioning.AppendJob(subnet.Status.Jobs, newJob, reconciler.MaxJobHistory)
+				subnet.Status.ProvisioningJobs = provisioning.AppendJob(subnet.Status.ProvisioningJobs, newJob, reconciler.MaxJobHistory)
 			}
 
 			// Should only have last 3 jobs
-			Expect(subnet.Status.Jobs).To(HaveLen(3))
-			Expect(subnet.Status.Jobs[0].JobID).To(Equal("job-3"))
-			Expect(subnet.Status.Jobs[1].JobID).To(Equal("job-4"))
-			Expect(subnet.Status.Jobs[2].JobID).To(Equal("job-5"))
+			Expect(subnet.Status.ProvisioningJobs).To(HaveLen(3))
+			Expect(subnet.Status.ProvisioningJobs[0].JobID).To(Equal("job-3"))
+			Expect(subnet.Status.ProvisioningJobs[1].JobID).To(Equal("job-4"))
+			Expect(subnet.Status.ProvisioningJobs[2].JobID).To(Equal("job-5"))
 		})
 	})
 
@@ -546,7 +546,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(subnet.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestJob := provisioning.FindLatestJobByType(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("deprovision-job-303"))
 			Expect(latestJob.BlockDeletionOnFailure).To(BeTrue())
@@ -565,7 +565,7 @@ var _ = Describe("SubnetReconciler", func() {
 		})
 
 		It("should poll deprovision job status", func() {
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "deprovision-running-404",
 					Type:      osacv1alpha1.JobTypeDeprovision,
@@ -589,7 +589,7 @@ var _ = Describe("SubnetReconciler", func() {
 		})
 
 		It("should wait for backoff when deprovision fails with BlockDeletionOnFailure", func() {
-			subnet.Status.Jobs = []osacv1alpha1.JobStatus{
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:                  "deprovision-failed-505",
 					Type:                   osacv1alpha1.JobTypeDeprovision,

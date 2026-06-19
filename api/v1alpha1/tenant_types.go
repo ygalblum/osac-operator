@@ -57,15 +57,10 @@ const (
 
 // Reason constants for Tenant conditions
 const (
-	TenantReasonFound             = "Found"
-	TenantReasonNotFound          = "NotFound"
-	TenantReasonMultipleFound     = "MultipleFound"
-	TenantReasonProvisioning      = "Provisioning"
-	TenantReasonProvisionFailed   = "ProvisionFailed"
-	TenantReasonDeprovisioning    = "Deprovisioning"
-	TenantReasonDeprovisionFailed = "DeprovisionFailed"
-	TenantReasonSecretNotFound    = "SecretNotFound"
-	TenantReasonTenantNotReady    = "TenantNotReady"
+	TenantReasonFound         = "Found"
+	TenantReasonNotFound      = "NotFound"
+	TenantReasonMultipleFound = "MultipleFound"
+	TenantReasonNoProvider    = "NoProvider"
 )
 
 // ResolvedStorageClass captures a single resolved StorageClass for a specific
@@ -126,8 +121,14 @@ type TenantStatus struct {
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 
-	// Jobs holds the history of provisioning jobs triggered for this tenant
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	// ProvisioningJobs holds the history of provisioning jobs triggered for this tenant
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
+
+	// StorageBackendJobs holds the history of storage backend provisioning/deprovisioning jobs
+	StorageBackendJobs []JobStatus `json:"storageBackendJobs,omitempty"`
+
+	// ClusterStorageJobs holds the history of cluster storage provisioning/deprovisioning jobs
+	ClusterStorageJobs []JobStatus `json:"clusterStorageJobs,omitempty"`
 
 	// StorageBackends tracks per-backend provisioning status.
 	// +kubebuilder:validation:Optional
@@ -157,11 +158,6 @@ type Tenant struct {
 
 	Spec   TenantSpec   `json:"spec,omitempty"`
 	Status TenantStatus `json:"status,omitempty"`
-}
-
-// GetStatusJobs returns the job history for provisioning provider integration.
-func (t *Tenant) GetStatusJobs() []JobStatus {
-	return t.Status.Jobs
 }
 
 // +kubebuilder:object:root=true

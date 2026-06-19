@@ -88,6 +88,61 @@ spec:
                 x-kubernetes-list-map-keys:
                 - clusterName
                 x-kubernetes-list-type: map
+              clusterStorageJobs:
+                description: ClusterStorageJobs holds the history of cluster storage
+                  provisioning/deprovisioning jobs
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
                   the state of the Tenant
@@ -146,9 +201,16 @@ spec:
                   - type
                   type: object
                 type: array
-              jobs:
-                description: Jobs holds the history of provisioning jobs triggered
-                  for this tenant
+              namespace:
+                description: Namespace is the namespace allocated to the tenant on
+                  the target cluster
+                type: string
+              phase:
+                description: Phase is the phase of the tenant
+                type: string
+              provisioningJobs:
+                description: ProvisioningJobs holds the history of provisioning jobs
+                  triggered for this tenant
                 items:
                   description: JobStatus represents the status of a provisioning or
                     deprovisioning job
@@ -193,10 +255,6 @@ spec:
                       enum:
                       - provision
                       - deprovision
-                      - storage-backend-provision
-                      - storage-backend-deprovision
-                      - cluster-storage-provision
-                      - cluster-storage-deprovision
                       type: string
                   required:
                   - jobID
@@ -205,13 +263,61 @@ spec:
                   - type
                   type: object
                 type: array
-              namespace:
-                description: Namespace is the namespace allocated to the tenant on
-                  the target cluster
-                type: string
-              phase:
-                description: Phase is the phase of the tenant
-                type: string
+              storageBackendJobs:
+                description: StorageBackendJobs holds the history of storage backend
+                  provisioning/deprovisioning jobs
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
               storageBackends:
                 description: StorageBackends tracks per-backend provisioning status.
                 items:

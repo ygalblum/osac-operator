@@ -123,9 +123,9 @@ type SecurityGroupStatus struct {
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
 
-	// Jobs holds an array of JobStatus tracking provisioning and deprovisioning operations
+	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
 	// BackendSecurityGroupID stores provider-specific security group identifier
 	// +kubebuilder:validation:Optional
@@ -174,4 +174,3 @@ type SecurityGroupList struct {
 func (s *SecurityGroup) GetName() string {
 	return s.ObjectMeta.Name
 }
-

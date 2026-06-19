@@ -99,7 +99,7 @@ var _ = Describe("Tenant Controller", func() {
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 			Expect(tenant.Status.StorageClasses).To(BeNil())
-			Expect(tenant.Status.Jobs).To(BeNil())
+			Expect(tenant.Status.ProvisioningJobs).To(BeNil())
 		})
 	})
 

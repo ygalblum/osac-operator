@@ -170,7 +170,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			// Verify the job was persisted
 			updated := &osacv1alpha1.PublicIPPool{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			latestJob := provisioning.FindLatestJobByType(updated.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(updated.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
 		})
@@ -302,7 +302,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 
 			Expect(deprovisionCalled).To(BeTrue())
 
-			latestJob := provisioning.FindLatestJobByType(toDelete.Status.Jobs, osacv1alpha1.JobTypeDeprovision)
+			latestJob := provisioning.FindLatestJobByType(toDelete.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("deprovision-job-123"))
 		})
@@ -452,7 +452,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 	Context("backoff on failure", func() {
 		It("should backoff when latest job failed with matching ConfigVersion", func() {
 			pool.Status.DesiredConfigVersion = testConfigVersion
-			pool.Status.Jobs = []osacv1alpha1.JobStatus{
+			pool.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -480,7 +480,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			}
 
 			pool.Status.DesiredConfigVersion = testConfigVersionUpdated
-			pool.Status.Jobs = []osacv1alpha1.JobStatus{
+			pool.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:         "failed-job",
 					Type:          osacv1alpha1.JobTypeProvision,
@@ -495,7 +495,7 @@ var _ = Describe("PublicIPPoolReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
-			latestJob := provisioning.FindLatestJobByType(pool.Status.Jobs, osacv1alpha1.JobTypeProvision)
+			latestJob := provisioning.FindLatestJobByType(pool.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("retry-job"))
 		})

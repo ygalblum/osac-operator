@@ -66,9 +66,9 @@ type PublicIPAttachmentStatus struct {
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
 
-	// Jobs holds an array of JobStatus tracking provisioning and deprovisioning operations
+	// ProvisioningJobs holds an array of JobStatus tracking provisioning and deprovisioning operations
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the PublicIPAttachment
 	// +kubebuilder:validation:Optional

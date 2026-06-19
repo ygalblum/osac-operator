@@ -28,7 +28,7 @@ var _ = Describe("PublicIPAttachmentSpec", func() {
 	It("should accept a valid spec with all fields", func() {
 		ci := "my-instance"
 		spec := v1alpha1.PublicIPAttachmentSpec{
-			PublicIP:         "my-public-ip",
+			PublicIP:        "my-public-ip",
 			ComputeInstance: &ci,
 		}
 

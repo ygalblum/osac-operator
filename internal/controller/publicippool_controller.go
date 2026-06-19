@@ -186,7 +186,7 @@ func (r *PublicIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alpha
 	// Set phase to Progressing on first provision (empty phase) or when spec changed
 	// after a previous success. Don't override Failed during backoff.
 	if pool.Status.Phase == "" || (pool.Status.Phase == v1alpha1.PublicIPPoolPhaseReady &&
-		!provisioning.IsConfigApplied(&pool.Status.Jobs, pool.Status.DesiredConfigVersion)) {
+		!provisioning.IsConfigApplied(&pool.Status.ProvisioningJobs, pool.Status.DesiredConfigVersion)) {
 		pool.Status.Phase = v1alpha1.PublicIPPoolPhaseProgressing
 	}
 
@@ -231,7 +231,7 @@ func (r *PublicIPPoolReconciler) handleProvisioning(ctx context.Context, pool *v
 	}
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, pool,
-		&provisioning.State{Jobs: &pool.Status.Jobs, DesiredConfigVersion: pool.Status.DesiredConfigVersion},
+		&provisioning.State{Jobs: &pool.Status.ProvisioningJobs, DesiredConfigVersion: pool.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
 			OnFailed:  func(_ string) { pool.Status.Phase = v1alpha1.PublicIPPoolPhaseFailed },
@@ -256,7 +256,7 @@ func (r *PublicIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool 
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, pool,
-		&pool.Status.Jobs, r.MaxJobHistory, r.StatusPollInterval)
+		&pool.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
 	if err != nil || !done {
 		return result, err
 	}

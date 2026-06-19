@@ -31,3 +31,4 @@ go.work
 
 # Development memory/notes (local only)
 MEMORY.md
+.artifacts/

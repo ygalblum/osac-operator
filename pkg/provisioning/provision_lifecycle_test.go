@@ -446,13 +446,13 @@ var _ = ginkgo.Describe("FindLatestJobByType", func() {
 var _ = ginkgo.Describe("GetJobsFromResource", func() {
 	ginkgo.It("returns jobs from ComputeInstance", func() {
 		ci := &v1alpha1.ComputeInstance{}
-		ci.Status.Jobs = []v1alpha1.JobStatus{{JobID: "j1"}}
+		ci.Status.ProvisioningJobs = []v1alpha1.JobStatus{{JobID: "j1"}}
 		Expect(GetJobsFromResource(ci)).To(HaveLen(1))
 	})
 
 	ginkgo.It("returns jobs from ClusterOrder", func() {
 		co := &v1alpha1.ClusterOrder{}
-		co.Status.Jobs = []v1alpha1.JobStatus{{JobID: "j1"}, {JobID: "j2"}}
+		co.Status.ProvisioningJobs = []v1alpha1.JobStatus{{JobID: "j1"}, {JobID: "j2"}}
 		Expect(GetJobsFromResource(co)).To(HaveLen(2))
 	})
 

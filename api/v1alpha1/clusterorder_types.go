@@ -150,11 +150,15 @@ type ClusterOrderStatus struct {
 	// NodeRequests reflects how many nodes are currently associated with the ClusterOrder
 	NodeRequests []NodeRequest `json:"nodeRequests,omitempty"`
 
-	// Jobs tracks the history of provision and deprovision operations
+	// ProvisioningJobs tracks the history of provision and deprovision operations
 	// Ordered chronologically, with latest operations at the end
 	// Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
+
+	// ClusterStorageJobs holds the history of cluster storage provisioning/deprovisioning jobs
+	// +kubebuilder:validation:Optional
+	ClusterStorageJobs []JobStatus `json:"clusterStorageJobs,omitempty"`
 
 	// DesiredConfigVersion is a hash of the current spec, used to detect spec changes
 	// that require re-provisioning.
@@ -190,4 +194,3 @@ type ClusterOrderList struct {
 func (co *ClusterOrder) GetName() string {
 	return co.ObjectMeta.Name
 }
-

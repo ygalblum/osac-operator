@@ -21,7 +21,7 @@ import (
 )
 
 // JobType represents the type of job operation
-// +kubebuilder:validation:Enum=provision;deprovision;storage-backend-provision;storage-backend-deprovision;cluster-storage-provision;cluster-storage-deprovision
+// +kubebuilder:validation:Enum=provision;deprovision
 type JobType string
 
 const (
@@ -29,12 +29,6 @@ const (
 	JobTypeProvision JobType = "provision"
 	// JobTypeDeprovision indicates a deprovisioning operation
 	JobTypeDeprovision JobType = "deprovision"
-
-	// Storage-specific job types used by the OSAC Storage Controller.
-	JobTypeStorageBackendProvision      JobType = "storage-backend-provision"
-	JobTypeStorageBackendDeprovision    JobType = "storage-backend-deprovision"
-	JobTypeClusterStorageProvision      JobType = "cluster-storage-provision"
-	JobTypeClusterStorageDeprovision    JobType = "cluster-storage-deprovision"
 )
 
 // JobState represents the current state of a job

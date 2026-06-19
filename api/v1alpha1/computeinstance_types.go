@@ -290,11 +290,11 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Format=date-time
 	LastRestartedAt *metav1.Time `json:"lastRestartedAt,omitempty"`
 
-	// Jobs tracks the history of provision and deprovision operations
+	// ProvisioningJobs tracks the history of provision and deprovision operations
 	// Ordered chronologically, with latest operations at the end
 	// Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
 	// +kubebuilder:validation:Optional
-	Jobs []JobStatus `json:"jobs,omitempty"`
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
 	// IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
 	// Populated when the instance is ready (phase Running).
@@ -334,11 +334,6 @@ type ComputeInstance struct {
 	// status defines the observed state of ComputeInstance
 	// +optional
 	Status ComputeInstanceStatus `json:"status,omitempty,omitzero"`
-}
-
-// GetStatusJobs returns the job history for provisioning provider integration.
-func (ci *ComputeInstance) GetStatusJobs() []JobStatus {
-	return ci.Status.Jobs
 }
 
 // +kubebuilder:object:root=true

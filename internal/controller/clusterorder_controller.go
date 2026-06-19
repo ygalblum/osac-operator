@@ -525,7 +525,7 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 
 func (r *ClusterOrderReconciler) provisionState(instance *v1alpha1.ClusterOrder) *provisioning.State {
 	return &provisioning.State{
-		Jobs:                 &instance.Status.Jobs,
+		Jobs:                 &instance.Status.ProvisioningJobs,
 		DesiredConfigVersion: instance.Status.DesiredConfigVersion,
 	}
 }
@@ -576,7 +576,7 @@ func (r *ClusterOrderReconciler) handleDeprovisioning(ctx context.Context, insta
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, instance,
-		&instance.Status.Jobs, r.MaxJobHistory, r.StatusPollInterval)
+		&instance.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
 	if err != nil || !done {
 		return result, err
 	}

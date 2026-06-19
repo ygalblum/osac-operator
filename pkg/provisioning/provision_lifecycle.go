@@ -41,28 +41,27 @@ type State struct {
 	DesiredConfigVersion string
 }
 
-// GetJobsFromResource extracts the jobs array from a resource.
-// Returns an empty slice for resource types that don't track jobs.
+// GetJobsFromResource extracts the standard provisioning jobs array from a resource.
+// Returns nil for resource types that don't use standard provisioning (e.g. Tenant,
+// whose storage jobs are tracked in lifecycle-specific arrays managed by the storage controller).
 func GetJobsFromResource(resource client.Object) []v1alpha1.JobStatus {
 	switch r := resource.(type) {
 	case *v1alpha1.ComputeInstance:
-		return r.Status.Jobs
+		return r.Status.ProvisioningJobs
 	case *v1alpha1.ClusterOrder:
-		return r.Status.Jobs
+		return r.Status.ProvisioningJobs
 	case *v1alpha1.VirtualNetwork:
-		return r.Status.Jobs
+		return r.Status.ProvisioningJobs
 	case *v1alpha1.Subnet:
-		return r.Status.Jobs
+		return r.Status.ProvisioningJobs
 	case *v1alpha1.SecurityGroup:
-		return r.Status.Jobs
+		return r.Status.ProvisioningJobs
 	case *v1alpha1.PublicIPPool:
-		return r.Status.Jobs
+		return r.Status.ProvisioningJobs
 	case *v1alpha1.PublicIP:
-		return r.Status.Jobs
+		return r.Status.ProvisioningJobs
 	case *v1alpha1.PublicIPAttachment:
-		return r.Status.Jobs
-	case *v1alpha1.Tenant:
-		return r.Status.Jobs
+		return r.Status.ProvisioningJobs
 	default:
 		return nil
 	}

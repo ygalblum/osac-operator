@@ -141,9 +141,18 @@ spec:
                 description: DesiredConfigVersion is a hash of the spec, used to detect
                   spec changes and control retry behavior.
                 type: string
-              jobs:
-                description: Jobs holds an array of JobStatus tracking provisioning
-                  and deprovisioning operations
+              phase:
+                description: Phase provides a single-value overview of the state of
+                  the PublicIP
+                enum:
+                - Progressing
+                - Failed
+                - Ready
+                - Deleting
+                type: string
+              provisioningJobs:
+                description: ProvisioningJobs holds an array of JobStatus tracking
+                  provisioning and deprovisioning operations
                 items:
                   description: JobStatus represents the status of a provisioning or
                     deprovisioning job
@@ -188,10 +197,6 @@ spec:
                       enum:
                       - provision
                       - deprovision
-                      - storage-backend-provision
-                      - storage-backend-deprovision
-                      - cluster-storage-provision
-                      - cluster-storage-deprovision
                       type: string
                   required:
                   - jobID
@@ -200,15 +205,6 @@ spec:
                   - type
                   type: object
                 type: array
-              phase:
-                description: Phase provides a single-value overview of the state of
-                  the PublicIP
-                enum:
-                - Progressing
-                - Failed
-                - Ready
-                - Deleting
-                type: string
               state:
                 description: State tracks the attachment lifecycle of the PublicIP
                 enum:
