@@ -72,6 +72,9 @@ func bareMetalInstanceStatusChangedPredicate() predicate.Predicate {
 			if !oldOk || !newOk {
 				return true
 			}
+			if !newObj.DeletionTimestamp.IsZero() {
+				return true
+			}
 			return !equality.Semantic.DeepEqual(oldObj.Status, newObj.Status)
 		},
 	}

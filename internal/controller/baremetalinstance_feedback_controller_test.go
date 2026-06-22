@@ -109,6 +109,18 @@ var _ = Describe("bareMetalInstanceStatusChangedPredicate", func() {
 		Expect(pred.Update(e)).To(BeTrue())
 	})
 
+	It("should pass Update events when deletionTimestamp is set", func() {
+		now := metav1.Now()
+		old := &bmfov1alpha1.BareMetalInstance{}
+		old.Status.Phase = bmfov1alpha1.BareMetalInstancePhaseProgressing
+
+		new := old.DeepCopy()
+		new.DeletionTimestamp = &now
+
+		e := event.UpdateEvent{ObjectOld: old, ObjectNew: new}
+		Expect(pred.Update(e)).To(BeTrue())
+	})
+
 	It("should filter Update events when only metadata changes", func() {
 		old := &bmfov1alpha1.BareMetalInstance{}
 		old.Status.Phase = bmfov1alpha1.BareMetalInstancePhaseProgressing
