@@ -43,6 +43,7 @@ spec:
           {{- end }}
           {{- if and .Values.aap.tokenSecret .Values.aap.tokenSecret.name }}
           - name: OSAC_AAP_TOKEN
+            value: null
             valueFrom:
               secretKeyRef:
                 name: {{ .Values.aap.tokenSecret.name }}
